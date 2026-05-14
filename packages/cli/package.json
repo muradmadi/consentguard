@@ -1,0 +1,20 @@
+{
+  "name": "@consentguard/cli",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "bin": {
+    "consentguard": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.2",
+    "typescript": "^5.4.5"
+  }
+}

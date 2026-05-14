@@ -1,0 +1,17 @@
+{
+  "name": "@consentguard/client",
+  "version": "0.1.0",
+  "main": "dist/consentguard.cjs.js",
+  "module": "dist/consentguard.esm.js",
+  "unpkg": "dist/consentguard.iife.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "vite build && tsc --emitDeclarationOnly",
+    "dev": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "vite": "^5.2.0",
+    "typescript": "^5.4.5"
+  }
+}
