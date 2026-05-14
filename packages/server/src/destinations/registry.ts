@@ -1,27 +1,10 @@
 import { DestinationRule } from '@consentguard/shared';
+import { ga4 } from './ga4';
+import { mixpanel } from './mixpanel';
 
 const REGISTRY: Record<string, DestinationRule> = {
-  ga4: {
-    id: 'ga4',
-    category: 'analytics',
-    endpoints: ['*.google-analytics.com'],
-    upstreamUrl: 'https://www.google-analytics.com/g/collect',
-    transformations: [
-      { path: 'events.*.params.email', action: 'strip' },
-      { path: 'events.*.params.user_id', action: 'hash' },
-      { path: 'client_id', action: 'hash' },
-    ],
-  },
-  mixpanel: {
-    id: 'mixpanel',
-    category: 'analytics',
-    endpoints: ['api.mixpanel.com/track'],
-    upstreamUrl: 'https://api.mixpanel.com/track',
-    transformations: [
-      { path: 'properties.$email', action: 'strip' },
-      { path: 'properties.distinct_id', action: 'hash' },
-    ],
-  },
+  ga4,
+  mixpanel,
 };
 
 export function getDestinationRule(id: string): DestinationRule | null {

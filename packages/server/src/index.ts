@@ -6,9 +6,13 @@ import { getDestinationRule, getDefaultRule } from './destinations/registry'
 import { scrubPayload } from './engine/transformer'
 
 import { cors } from 'hono/cors'
+import { logger } from 'hono/logger'
+
+import { serverConfig } from './config'
 
 const app = new Hono()
 
+app.use('*', logger())
 app.use('*', cors({
   origin: '*',
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -16,12 +20,7 @@ app.use('*', cors({
   exposeHeaders: ['Content-Length', 'X-Consent-UserId'],
 }))
 
-// In a real app, these would come from env vars
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
-const PROXY_SECRET = process.env.PROXY_SECRET || 'dev-proxy-secret'
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'dev-admin-secret'
-
-const consentManager = new ConsentManager(REDIS_URL)
+const consentManager = new ConsentManager(serverConfig.redisUrl)
 
 app.get('/health', async (c) => {
   return c.json({ status: 'ok', redis: 'connected' })
@@ -32,7 +31,7 @@ app.get('/health', async (c) => {
  */
 app.put('/consent/:userId', async (c) => {
   const auth = c.req.header('Authorization')
-  if (auth !== `Bearer ${ADMIN_SECRET}`) return c.json({ error: 'Unauthorized' }, 403)
+  if (auth !== `Bearer ${serverConfig.adminSecret}`) return c.json({ error: 'Unauthorized' }, 403)
 
   const userId = c.req.param('userId')
   const body = await c.req.json()
@@ -46,7 +45,7 @@ app.put('/consent/:userId', async (c) => {
 
 app.get('/consent/:userId', async (c) => {
   const auth = c.req.header('Authorization')
-  if (auth !== `Bearer ${ADMIN_SECRET}`) return c.json({ error: 'Unauthorized' }, 403)
+  if (auth !== `Bearer ${serverConfig.adminSecret}`) return c.json({ error: 'Unauthorized' }, 403)
 
   const userId = c.req.param('userId')
   const consent = await consentManager.getConsent(userId)
@@ -57,9 +56,6 @@ app.get('/consent/:userId', async (c) => {
  * Analytics Ingestion API
  */
 app.post('/ingest/:destination', async (c) => {
-  const auth = c.req.header('Authorization')
-  if (auth !== `Bearer ${PROXY_SECRET}`) return c.json({ error: 'Unauthorized' }, 403)
-
   const destination = c.req.param('destination')
   const userId = c.req.header('X-Consent-UserId') || 'anonymous'
   const payload = await c.req.json()
@@ -108,7 +104,7 @@ app.post('/ingest/:destination', async (c) => {
   }
 })
 
-const port = process.env.PORT ? parseInt(process.env.PORT) : defaultConfig.proxy.port
+const port = serverConfig.port
 console.log(`ConsentGuard Proxy running on port ${port}`)
 
 serve({

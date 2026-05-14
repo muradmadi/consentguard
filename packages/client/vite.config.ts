@@ -9,7 +9,7 @@ export default defineConfig({
       fileName: (format) => `consentguard.${format}.js`,
       formats: ['es', 'cjs', 'iife'],
     },
-    minify: 'terser',
+    minify: 'esbuild',
     emptyOutDir: true,
   },
 })

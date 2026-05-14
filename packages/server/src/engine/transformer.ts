@@ -1,5 +1,6 @@
 import { DestinationRule, TransformationAction } from '@consentguard/shared';
-import { createHash } from 'crypto';
+import { applyStrip } from './transformations/strip';
+import { applyHash } from './transformations/hash';
 
 /**
  * Scrub a payload based on destination rules.
@@ -9,7 +10,7 @@ export function scrubPayload(payload: any, rule: DestinationRule): any {
     return payload;
   }
 
-  // Clone payload to avoid mutating original (though in proxy it's usually fresh)
+  // Clone payload to avoid mutating original
   const scrubbed = JSON.parse(JSON.stringify(payload));
 
   for (const transform of rule.transformations) {
@@ -40,16 +41,18 @@ function applyTransformation(obj: any, path: string, action: TransformationActio
 
     if (tail.length === 0) {
       // Leaf node: Apply action
-      if (current[head] !== undefined) {
-        if (action === 'strip') {
-          delete current[head];
-        } else if (action === 'hash') {
-          if (typeof current[head] === 'string') {
-            current[head] = createHash('sha256').update(current[head]).digest('hex');
+      switch (action) {
+        case 'strip':
+          applyStrip(current, head);
+          break;
+        case 'hash':
+          applyHash(current, head);
+          break;
+        case 'redact':
+          if (current[head] !== undefined) {
+            current[head] = '[REDACTED]';
           }
-        } else if (action === 'redact') {
-          current[head] = '[REDACTED]';
-        }
+          break;
       }
     } else {
       // Branch node: Continue traversal

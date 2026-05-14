@@ -7,19 +7,19 @@
 
 console.log('[ConsentGuard] Library loaded');
 
+import { INTERCEPTION_PATTERNS } from './patterns';
+
 export interface ClientConfig {
   proxyUrl: string
   destinations: Record<string, string>
   userId?: string
+  observeMutations?: boolean
 }
 
 const DEFAULT_CONFIG: ClientConfig = {
   proxyUrl: 'http://localhost:3000/ingest',
-  destinations: {
-    'google-analytics.com': 'ga4',
-    'api.mixpanel.com': 'mixpanel',
-    'segment.io': 'segment',
-  }
+  destinations: INTERCEPTION_PATTERNS,
+  observeMutations: true,
 }
 
 export function init(config?: Partial<ClientConfig>) {
@@ -34,6 +34,10 @@ export function init(config?: Partial<ClientConfig>) {
   const userId = mergedConfig.userId || getOrSetUserId()
 
   console.log('[ConsentGuard] Initialized with User ID:', userId)
+
+  if (mergedConfig.observeMutations) {
+    observeMutations();
+  }
 
   /**
    * Helper to determine if a URL should be intercepted
@@ -98,7 +102,7 @@ export function init(config?: Partial<ClientConfig>) {
   XHR.send = function(body?: Document | XMLHttpRequestBodyInit | null) {
     if (this._cgDestination) {
       this.setRequestHeader('X-Consent-UserId', userId)
-      this.setRequestHeader('X-Original-Url', this._cgOriginalUrl)
+      this.setRequestHeader('X-Original-Url', this._cgOriginalUrl || '')
     }
     return originalSend.apply(this, [body])
   }
@@ -125,6 +129,32 @@ export function init(config?: Partial<ClientConfig>) {
       return originalSendBeacon.call(navigator, url, data)
     }
   }
+}
+
+/**
+ * Observe DOM mutations to catch dynamically added scripts or trackers.
+ */
+function observeMutations() {
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeName === 'SCRIPT') {
+          const script = node as HTMLScriptElement;
+          if (script.src) {
+            // Log for debugging: we caught a dynamic script
+            console.log('[ConsentGuard] Caught dynamic script:', script.src);
+            // The global patches (fetch/XHR) will handle the network calls
+            // but we could also block the script execution here if needed.
+          }
+        }
+      });
+    });
+  });
+
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
 }
 
 /**
