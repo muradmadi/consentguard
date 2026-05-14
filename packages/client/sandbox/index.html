@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ConsentGuard Sandbox</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; background: #f4f4f9; }
+        .card { background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 1rem; }
+        button { background: #4f46e5; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; margin-right: 0.5rem; }
+        button:hover { background: #4338ca; }
+        pre { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 4px; overflow-x: auto; }
+        .status { font-weight: bold; }
+        .blocked { color: #dc2626; }
+        .passed { color: #16a34a; }
+    </style>
+</head>
+<body>
+    <h1>🛡️ ConsentGuard Sandbox</h1>
+    
+    <div class="card">
+        <h2>1. User Configuration</h2>
+        <p>Current User ID: <code id="user-id-display">loading...</code></p>
+        <p>Status: <span id="proxy-status" class="status">Checking Proxy...</span></p>
+    </div>
+
+    <div class="card">
+        <h2>2. Trigger Analytics</h2>
+        <p>These buttons will trigger network requests that should be intercepted by ConsentGuard.</p>
+        <button onclick="triggerGA4()">Trigger GA4 (Fetch)</button>
+        <button onclick="triggerMixpanel()">Trigger Mixpanel (XHR)</button>
+        <button onclick="triggerBeacon()">Trigger Beacon</button>
+    </div>
+
+    <div class="card">
+        <h2>3. Logs</h2>
+        <pre id="logs">Wait for events...</pre>
+    </div>
+
+    <!-- 
+        Load ConsentGuard Client
+        In a real app, you'd use: import '@consentguard/client'
+    -->
+    <script type="module" src="./consentguard.es.js"></script>
+
+    <script>
+        function log(msg) {
+            const el = document.getElementById('logs');
+            el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n` + el.textContent;
+        }
+
+        // Display User ID from localStorage
+        document.getElementById('user-id-display').textContent = localStorage.getItem('cg_user_id') || 'not set';
+
+        // Check proxy health
+        fetch('http://localhost:3000/health')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('proxy-status').textContent = 'Proxy Online';
+                document.getElementById('proxy-status').className = 'status passed';
+            })
+            .catch(e => {
+                document.getElementById('proxy-status').textContent = 'Proxy Offline (Run npm run dev)';
+                document.getElementById('proxy-status').className = 'status blocked';
+            });
+
+        async function triggerGA4() {
+            log('Triggering GA4 Fetch...');
+            try {
+                const res = await fetch('https://www.google-analytics.com/g/collect?v=2&tid=G-123', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        client_id: '12345.67890',
+                        events: [{
+                            name: 'purchase',
+                            params: { email: 'user@example.com', value: 100 }
+                        }]
+                    })
+                });
+                log(`GA4 Response: ${res.status}`);
+            } catch (e) {
+                log(`GA4 Error: ${e.message}`);
+            }
+        }
+
+        function triggerMixpanel() {
+            log('Triggering Mixpanel XHR...');
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', 'https://api.mixpanel.com/track');
+            xhr.onload = () => log(`Mixpanel Response: ${xhr.status}`);
+            xhr.onerror = () => log(`Mixpanel Error`);
+            xhr.send(JSON.stringify({
+                event: 'Signed Up',
+                properties: { $email: 'test@example.com', distinct_id: 'user_1' }
+            }));
+        }
+
+        function triggerBeacon() {
+            log('Triggering Beacon...');
+            const success = navigator.sendBeacon('https://api.mixpanel.com/track', JSON.stringify({
+                event: 'Page View',
+                properties: { path: '/sandbox' }
+            }));
+            log(`Beacon Queued: ${success}`);
+        }
+    </script>
+</body>
+</html>

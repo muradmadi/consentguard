@@ -5,7 +5,16 @@ import { ConsentManager } from './engine/consent'
 import { getDestinationRule, getDefaultRule } from './destinations/registry'
 import { scrubPayload } from './engine/transformer'
 
+import { cors } from 'hono/cors'
+
 const app = new Hono()
+
+app.use('*', cors({
+  origin: '*',
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Consent-UserId', 'X-Original-Url'],
+  exposeHeaders: ['Content-Length', 'X-Consent-UserId'],
+}))
 
 // In a real app, these would come from env vars
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'
@@ -70,10 +79,33 @@ app.post('/ingest/:destination', async (c) => {
   // 4. Scrub Payload
   const scrubbed = scrubPayload(payload, rule)
 
-  // 5. Forward (Stub for now)
-  console.log(`[ConsentGuard] Forwarding scrubbed ${destination} for user ${userId}:`, JSON.stringify(scrubbed))
+  // 5. Forward
+  const targetUrl = c.req.header('X-Original-Url') || rule.upstreamUrl
+  if (!targetUrl) {
+    console.error(`[ConsentGuard] No target URL found for ${destination}`)
+    return c.json({ error: 'Missing target URL' }, 400)
+  }
 
-  return c.body(null, 204)
+  console.log(`[ConsentGuard] Forwarding scrubbed ${destination} for user ${userId} to ${targetUrl}`)
+
+  try {
+    const response = await fetch(targetUrl, {
+      method: c.req.method,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': c.req.header('User-Agent') || 'ConsentGuard Proxy',
+      },
+      body: JSON.stringify(scrubbed),
+    })
+
+    console.log(`[ConsentGuard] Upstream ${destination} responded with ${response.status}`)
+    
+    // Return the same status and body if possible, or just 204
+    return c.body(null, response.status as any)
+  } catch (error) {
+    console.error(`[ConsentGuard] Failed to forward to ${destination}:`, error)
+    return c.json({ error: 'Upstream connection failed' }, 502)
+  }
 })
 
 const port = process.env.PORT ? parseInt(process.env.PORT) : defaultConfig.proxy.port

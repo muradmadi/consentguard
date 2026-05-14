@@ -27,6 +27,7 @@ export const DestinationRuleSchema = z.object({
   id: z.string(),
   category: z.string(), // e.g., 'analytics', 'marketing'
   endpoints: z.array(z.string()), // Domain patterns to match
+  upstreamUrl: z.string().optional(), // Default URL to forward to
   transformations: z.array(z.object({
     path: z.string(), // JSON path (e.g., 'events.*.params.email')
     action: TransformationActionSchema,

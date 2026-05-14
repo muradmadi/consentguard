@@ -5,6 +5,7 @@ const REGISTRY: Record<string, DestinationRule> = {
     id: 'ga4',
     category: 'analytics',
     endpoints: ['*.google-analytics.com'],
+    upstreamUrl: 'https://www.google-analytics.com/g/collect',
     transformations: [
       { path: 'events.*.params.email', action: 'strip' },
       { path: 'events.*.params.user_id', action: 'hash' },
@@ -15,6 +16,7 @@ const REGISTRY: Record<string, DestinationRule> = {
     id: 'mixpanel',
     category: 'analytics',
     endpoints: ['api.mixpanel.com/track'],
+    upstreamUrl: 'https://api.mixpanel.com/track',
     transformations: [
       { path: 'properties.$email', action: 'strip' },
       { path: 'properties.distinct_id', action: 'hash' },
