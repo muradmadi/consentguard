@@ -5,11 +5,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "turbo run build",
-    "dev": "turbo run dev",
-    "lint": "turbo run lint",
-    "typecheck": "turbo run typecheck",
-    "test": "turbo run test"
+    "build": "npx turbo run build",
+    "dev": "npx turbo run dev",
+    "lint": "npx turbo run lint",
+    "typecheck": "npx turbo run typecheck",
+    "test": "npx turbo run test"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

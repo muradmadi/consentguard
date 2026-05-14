@@ -1,3 +1,6 @@
+---
+description: Integrating a new Consent Management Platform (CMP) adapter like OneTrust or Cookiebot.
+---
 # Workflow: Integrating a New Consent Management Platform (CMP) Adapter
 
 ## Context
