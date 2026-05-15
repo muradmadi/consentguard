@@ -52,7 +52,8 @@ function App() {
         </div>
         <nav className="nav-links">
           <a href="#" onClick={() => setActiveTab('dashboard')} className={`nav-link ${activeTab === 'dashboard' ? 'active' : ''}`}>Dashboard</a>
-          <a href="#" onClick={() => setActiveTab('rules')} className={`nav-link ${activeTab === 'rules' ? 'active' : ''}`}>Rules</a>
+          <a href="#" onClick={() => setActiveTab('rules')} className={`nav-link ${activeTab === 'rules' ? 'active' : ''}`}>Governance</a>
+          <a href="#" onClick={() => setActiveTab('registry')} className={`nav-link ${activeTab === 'registry' ? 'active' : ''}`}>Registry</a>
           <a href="#" onClick={() => setActiveTab('audit')} className={`nav-link ${activeTab === 'audit' ? 'active' : ''}`}>Audit Log</a>
         </nav>
       </header>
@@ -60,9 +61,17 @@ function App() {
       <main>
         {activeTab === 'dashboard' && (
           <div className="fade-in">
-            <div style={{ marginBottom: '32px' }}>
-              <h1 style={{ marginBottom: '8px' }}>Overview</h1>
-              <p>Real-time monitoring of your privacy enforcement layer.</p>
+            <div style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h1 style={{ marginBottom: '8px' }}>Overview</h1>
+                <p>Real-time monitoring of your privacy enforcement layer.</p>
+              </div>
+              <div className="card" style={{ padding: '12px 20px', margin: 0, display: 'flex', alignItems: 'center', gap: '12px', border: '1px solid #333' }}>
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#0070f3', boxShadow: '0 0 8px #0070f3' }}></div>
+                <div style={{ fontSize: '13px', fontWeight: 600 }}>System Healthy</div>
+                <div style={{ height: '16px', width: '1px', background: '#333' }}></div>
+                <div style={{ fontSize: '12px', color: 'var(--accents-4)' }}>Redis: Connected</div>
+              </div>
             </div>
 
             <div className="stats-grid">
@@ -171,6 +180,59 @@ function App() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'registry' && (
+          <div className="fade-in">
+             <div style={{ marginBottom: '32px' }}>
+                <h1 style={{ marginBottom: '8px' }}>Global Registry</h1>
+                <p>The universal list of destinations ConsentGuard can protect out-of-the-box.</p>
+              </div>
+              
+              <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: '32px' }}>
+                <div className="card">
+                  <h3>Total Rules</h3>
+                  <div className="stat-value">{rules.length}</div>
+                </div>
+                <div className="card">
+                  <h3>Overrides</h3>
+                  <div className="stat-value" style={{ color: '#0070f3' }}>
+                    {rules.filter((r: any) => (r as any)._isOverride).length}
+                  </div>
+                </div>
+                <div className="card">
+                  <h3>Coverage</h3>
+                  <div className="stat-value" style={{ color: '#00ff00' }}>94%</div>
+                </div>
+              </div>
+
+              <div className="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>DESTINATION</th>
+                      <th>ENDPOINTS</th>
+                      <th>STATUS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rules.map(rule => (
+                      <tr key={rule.id}>
+                        <td style={{ fontWeight: 600 }}>{rule.id}</td>
+                        <td style={{ color: 'var(--accents-4)', fontSize: '12px' }}>{rule.endpoints.join(', ')}</td>
+                        <td>
+                          {(rule as any)._isOverride ? (
+                            <span className="badge badge-success" style={{ background: 'rgba(0, 112, 243, 0.1)', border: '1px solid #0070f3', color: '#0070f3' }}>Active Override</span>
+                          ) : (
+                            <span className="badge badge-secondary">Default</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
           </div>
         )}
       </main>

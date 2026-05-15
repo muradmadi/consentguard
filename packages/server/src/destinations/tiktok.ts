@@ -8,11 +8,11 @@ export const tiktok: DestinationRule = {
   transformations: [
     {
       path: 'context.user.email',
-      action: 'strip',
+      action: 'hash',
     },
     {
       path: 'context.user.phone_number',
-      action: 'strip',
+      action: 'hash',
     },
     {
       path: 'context.ip',

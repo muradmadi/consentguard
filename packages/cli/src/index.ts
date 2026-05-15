@@ -140,4 +140,67 @@ program
     poll();
   });
 
+program
+  .command('status')
+  .description('Check the health and status of ConsentGuard components')
+  .option('-u, --url <url>', 'Proxy URL', 'http://localhost:3000')
+  .option('-s, --secret <secret>', 'Admin Secret')
+  .action(async (options) => {
+    console.log(pc.cyan('🛡️  ConsentGuard System Status\n'));
+    
+    const secret = options.secret || process.env.ADMIN_SECRET || 'dev-admin-secret';
+
+    // 1. Check Proxy Heartbeat
+    try {
+      const start = Date.now();
+      const res = await fetch(`${options.url}/health`);
+      const latency = Date.now() - start;
+      
+      if (res.ok) {
+        const data: any = await res.json();
+        console.log(`${pc.green('●')} Proxy:     ${pc.bold('Online')} ${pc.dim(`(${latency}ms)`)}`);
+        console.log(`  └─ Runtime: ${pc.dim(data.storage === 'RedisStorageProvider' ? 'Node.js + Redis' : 'In-Memory / Edge')}`);
+      } else {
+        console.log(`${pc.red('○')} Proxy:     ${pc.bold('Error')} ${pc.dim(`(HTTP ${res.status})`)}`);
+      }
+    } catch (e) {
+      console.log(`${pc.red('○')} Proxy:     ${pc.bold('Offline')} ${pc.dim('(Connection Refused)')}`);
+    }
+
+    // 2. Check Stats & Registry
+    try {
+      const res = await fetch(`${options.url}/api/stats`, {
+        headers: { 'Authorization': `Bearer ${secret}` }
+      });
+      
+      if (res.ok) {
+        const stats: any = await res.json();
+        console.log(`${pc.green('●')} Stats:     ${pc.bold('Accessible')}`);
+        console.log(`  ├─ Requests:  ${pc.cyan(stats.totalRequests || 0)}`);
+        console.log(`  ├─ Blocked:   ${pc.red(stats.blockedRequests || 0)}`);
+        console.log(`  └─ Errors:    ${pc.red(stats.errors || 0)}`);
+      } else {
+        console.log(`${pc.yellow('○')} Stats:     ${pc.bold('Unauthorized')} ${pc.dim('(Check ADMIN_SECRET)')}`);
+      }
+    } catch (e) {}
+
+    // 3. Check Rules
+    try {
+      const res = await fetch(`${options.url}/api/rules`, {
+        headers: { 'Authorization': `Bearer ${secret}` }
+      });
+      
+      if (res.ok) {
+        const rules: any[] = await res.json();
+        console.log(`${pc.green('●')} Registry:  ${pc.bold(rules.length + ' Rules Loaded')}`);
+        const overrides = rules.filter(r => r._isOverride).length;
+        if (overrides > 0) {
+          console.log(`  └─ Overrides: ${pc.yellow(overrides + ' active')}`);
+        }
+      }
+    } catch (e) {}
+
+    console.log(pc.dim('\nUse "consentguard logs" to see real-time traffic.'));
+  });
+
 program.parse();

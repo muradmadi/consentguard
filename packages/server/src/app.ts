@@ -9,7 +9,7 @@ import { metrics } from './engine/metrics'
 import { AuditLogger } from './engine/audit'
 import { BufferManager } from './engine/buffer'
 import { RuleManager } from './engine/rules'
-import { webhookRouter } from './webhooks/cmp'
+import { createWebhookRouter } from './webhooks/cmp'
 import { StorageProvider } from './engine/storage'
 import { getServerConfig } from './config'
 
@@ -23,7 +23,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
   const ruleManager = new RuleManager(storage)
 
   app.use('*', logger())
-  app.route('/webhooks', webhookRouter)
+  app.route('/webhooks', createWebhookRouter(storage))
   app.use('*', cors({
     origin: '*',
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
