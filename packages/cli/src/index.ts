@@ -84,4 +84,17 @@ program
     });
   });
 
+program
+  .command('dashboard')
+  .description('Open the ConsentGuard Admin Dashboard')
+  .action(() => {
+    console.log(pc.cyan('🛡️  Launching ConsentGuard Dashboard...\n'));
+    
+    // For now, we'll just print the URL and instructions.
+    // In a full implementation, we might start a separate process or serve it from the proxy.
+    console.log(pc.white('1. Ensure the proxy is running: ') + pc.bold('consentguard start'));
+    console.log(pc.white('2. Open the dashboard: ') + pc.underline(pc.blue('http://localhost:3000/dashboard')));
+    console.log(pc.dim('\nTip: Use the ADMIN_SECRET from your .consentguardrc.json to log in.'));
+  });
+
 program.parse();

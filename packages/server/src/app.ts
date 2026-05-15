@@ -8,6 +8,7 @@ import { scrubPayload } from './engine/transformer'
 import { metrics } from './engine/metrics'
 import { AuditLogger } from './engine/audit'
 import { BufferManager } from './engine/buffer'
+import { RuleManager } from './engine/rules'
 import { webhookRouter } from './webhooks/cmp'
 import { StorageProvider } from './engine/storage'
 import { getServerConfig } from './config'
@@ -19,6 +20,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
   const consentManager = new ConsentManager(storage)
   const auditLogger = new AuditLogger(storage)
   const bufferManager = new BufferManager(storage)
+  const ruleManager = new RuleManager(storage)
 
   app.use('*', logger())
   app.route('/webhooks', webhookRouter)
@@ -53,7 +55,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     if (buffered.length > 0) {
       console.log(`[ConsentGuard] Replaying ${buffered.length} buffered requests for ${userId}`)
       // We fire and forget the replay to avoid blocking the consent response
-      replayBufferedRequests(userId, buffered, result.data, { consentManager, auditLogger })
+      replayBufferedRequests(userId, buffered, result.data, { consentManager, auditLogger, ruleManager })
     }
 
     return c.json({ status: 'saved', replayed: buffered.length })
@@ -66,6 +68,42 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     const userId = c.req.param('userId')
     const consent = await consentManager.getConsent(userId)
     return c.json(consent)
+  })
+
+  /**
+   * Rule Management API
+   */
+  app.get('/api/rules', async (c) => {
+    const auth = c.req.header('Authorization')
+    if (auth !== `Bearer ${config.adminSecret}`) return c.json({ error: 'Unauthorized' }, 403)
+    const rules = await ruleManager.getAllRules()
+    return c.json(rules)
+  })
+
+  app.put('/api/rules/:id', async (c) => {
+    const auth = c.req.header('Authorization')
+    if (auth !== `Bearer ${config.adminSecret}`) return c.json({ error: 'Unauthorized' }, 403)
+    const id = c.req.param('id')
+    const body = await c.req.json()
+    await ruleManager.setOverride(id, body)
+    return c.json({ status: 'saved' })
+  })
+
+  app.delete('/api/rules/:id', async (c) => {
+    const auth = c.req.header('Authorization')
+    if (auth !== `Bearer ${config.adminSecret}`) return c.json({ error: 'Unauthorized' }, 403)
+    const id = c.req.param('id')
+    await ruleManager.deleteOverride(id)
+    return c.json({ status: 'deleted' })
+  })
+
+  app.get('/api/stats', async (c) => {
+    const auth = c.req.header('Authorization')
+    if (auth !== `Bearer ${config.adminSecret}`) return c.json({ error: 'Unauthorized' }, 403)
+    
+    // In a real app, we'd pull these from Redis or a metrics store.
+    // For now, we'll return the in-memory metrics.
+    return c.json(metrics.getMetrics())
   })
 
   app.get('/metrics', async (c) => {
@@ -102,8 +140,8 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     // 1. Resolve Consent
     const consent = await consentManager.getConsent(userId)
 
-    // 2. Resolve Rule
-    const rule = getDestinationRule(destination) || getDefaultRule(destination)
+    // 2. Resolve Rule (Dynamic)
+    const rule = await ruleManager.getRule(destination)
 
     // 3. Check Category Consent
     if (!consentManager.hasConsent(consent, rule.category)) {
@@ -195,10 +233,10 @@ export function createApp(storage: StorageProvider, env: any = {}) {
 /**
  * Replay Helper
  */
-async function replayBufferedRequests(userId: string, buffered: any[], consent: any, deps: { consentManager: ConsentManager, auditLogger: AuditLogger }) {
-  const { consentManager, auditLogger } = deps
+async function replayBufferedRequests(userId: string, buffered: any[], consent: any, deps: { consentManager: ConsentManager, auditLogger: AuditLogger, ruleManager: RuleManager }) {
+  const { consentManager, auditLogger, ruleManager } = deps
   for (const req of buffered) {
-    const rule = getDestinationRule(req.destination) || getDefaultRule(req.destination)
+    const rule = await ruleManager.getRule(req.destination)
     
     if (consentManager.hasConsent(consent, rule.category)) {
       const scrubbed = scrubPayload(req.payload, rule)
