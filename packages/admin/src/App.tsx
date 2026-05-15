@@ -1,12 +1,17 @@
-import React, { useState, useEffect } from 'react'
-import { Layout, BarChart3, Shield, Activity, Settings, Search, ArrowUpRight } from 'lucide-react'
-import { fetchStats, fetchRules, fetchAuditLogs } from './lib/api'
+import { useState, useEffect } from 'react'
+import { Shield, ArrowUpRight, ChevronRight } from 'lucide-react'
+import { fetchStats, fetchRules, fetchAuditLogs, updateRule } from './lib/api'
+import { RuleEditor } from './components/RuleEditor'
+import type { DestinationRule } from '@consentguard/shared'
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [stats, setStats] = useState<any>(null)
-  const [rules, setRules] = useState<any[]>([])
+  const [rules, setRules] = useState<DestinationRule[]>([])
   const [logs, setLogs] = useState<any[]>([])
+  const [selectedRule, setSelectedRule] = useState<DestinationRule | null>(null)
+  const [selectedLog, setSelectedLog] = useState<any | null>(null)
+  const [, setIsLoading] = useState(false)
 
   useEffect(() => {
     const loadData = async () => {
@@ -23,6 +28,19 @@ function App() {
     const interval = setInterval(loadData, 5000)
     return () => clearInterval(interval)
   }, [])
+
+  const handleSaveRule = async (updatedRule: DestinationRule) => {
+    setIsLoading(true)
+    try {
+      await updateRule(updatedRule.id, updatedRule)
+      setRules(rules.map(r => r.id === updatedRule.id ? updatedRule : r))
+      setSelectedRule(null)
+    } catch (e) {
+      alert('Failed to save rule')
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   return (
     <div className="app-container">
@@ -87,11 +105,11 @@ function App() {
                 </thead>
                 <tbody>
                   {logs.slice(0, 10).map((log, i) => (
-                    <tr key={i}>
+                    <tr key={i} onClick={() => setSelectedLog(log)} style={{ cursor: 'pointer' }}>
                       <td style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}>{log.userId}</td>
                       <td>{log.destination}</td>
                       <td>
-                        <span className={`badge ${log.decision === 'blocked' ? 'badge-error' : 'badge-success'}`}>
+                        <span className={`badge ${log.decision === 'blocked' ? 'badge-error' : log.decision === 'scrubbed' ? 'badge-success' : 'badge-success'}`} style={{ opacity: log.decision === 'scrubbed' ? 0.8 : 1 }}>
                           {log.decision}
                         </span>
                       </td>
@@ -140,7 +158,13 @@ function App() {
                         </div>
                       </td>
                       <td>
-                        <button className="btn btn-secondary" style={{ padding: '4px 12px' }}>Edit</button>
+                        <button 
+                          className="btn btn-secondary" 
+                          style={{ padding: '4px 12px' }}
+                          onClick={() => setSelectedRule(rule)}
+                        >
+                          Edit
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -150,6 +174,57 @@ function App() {
           </div>
         )}
       </main>
+
+      {selectedRule && (
+        <RuleEditor 
+          rule={selectedRule} 
+          onClose={() => setSelectedRule(null)} 
+          onSave={handleSaveRule} 
+        />
+      )}
+
+      {selectedLog && (
+        <div className="modal-overlay" onClick={() => setSelectedLog(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Audit Detail</h2>
+              <button className="btn-icon" onClick={() => setSelectedLog(null)}><ChevronRight size={20} /></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label>User ID</label>
+                <div style={{ fontFamily: 'var(--font-mono)' }}>{selectedLog.userId}</div>
+              </div>
+              <div className="form-group">
+                <label>Destination</label>
+                <div>{selectedLog.destination}</div>
+              </div>
+              <div className="form-group">
+                <label>Decision</label>
+                <span className={`badge ${selectedLog.decision === 'blocked' ? 'badge-error' : 'badge-success'}`}>
+                  {selectedLog.decision}
+                </span>
+              </div>
+              {selectedLog.transformationsApplied && selectedLog.transformationsApplied.length > 0 && (
+                <div className="form-group">
+                  <label>Transformations Applied</label>
+                  <ul style={{ listStyle: 'none', padding: 0 }}>
+                    {selectedLog.transformationsApplied.map((t: string, i: number) => (
+                      <li key={i} style={{ padding: '4px 0', borderBottom: '1px solid var(--accents-1)', fontSize: '13px' }}>
+                        <code>{t}</code>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="form-group">
+                <label>Reason</label>
+                <p>{selectedLog.reason}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

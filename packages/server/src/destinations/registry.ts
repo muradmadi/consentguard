@@ -4,11 +4,16 @@ import { mixpanel } from './mixpanel';
 import { amplitude } from './amplitude';
 import { facebook } from './facebook';
 
+import { tiktok } from './tiktok';
+import { hotjar } from './hotjar';
+
 const REGISTRY: Record<string, DestinationRule> = {
   ga4,
   mixpanel,
   amplitude,
   facebook_pixel: facebook,
+  tiktok,
+  hotjar,
 };
 
 export function getDestinationRule(id: string): DestinationRule | null {

@@ -97,4 +97,47 @@ program
     console.log(pc.dim('\nTip: Use the ADMIN_SECRET from your .consentguardrc.json to log in.'));
   });
 
+program
+  .command('logs')
+  .description('Stream real-time privacy enforcement logs')
+  .option('-u, --url <url>', 'Proxy URL', 'http://localhost:3000')
+  .option('-s, --secret <secret>', 'Admin Secret')
+  .action(async (options) => {
+    console.log(pc.cyan('🛡️  Streaming ConsentGuard Logs... (Ctrl+C to stop)\n'));
+    
+    let lastTimestamp = '';
+    const secret = options.secret || process.env.ADMIN_SECRET || 'dev-admin-secret';
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`${options.url}/audit`, {
+          headers: { 'Authorization': `Bearer ${secret}` }
+        });
+        
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        
+        const logs: any[] = await res.json();
+        const newLogs = logs.filter(l => l.timestamp > lastTimestamp).reverse();
+        
+        for (const log of newLogs) {
+          const time = pc.dim(new Date(log.timestamp).toLocaleTimeString());
+          const decision = log.decision === 'blocked' ? pc.red('BLOCKED') : 
+                          log.decision === 'scrubbed' ? pc.yellow('SCRUBBED') : 
+                          pc.green('FORWARDED');
+          
+          console.log(`${time} | ${pc.bold(log.destination.padEnd(15))} | ${decision.padEnd(20)} | ${pc.dim(log.userId)}`);
+          if (log.transformationsApplied?.length > 0) {
+            console.log(pc.dim(`  └─ Transformations: ${log.transformationsApplied.join(', ')}`));
+          }
+          lastTimestamp = log.timestamp;
+        }
+      } catch (e: any) {
+        console.error(pc.red(`\n❌ Error polling logs: ${e.message}`));
+      }
+    };
+
+    setInterval(poll, 2000);
+    poll();
+  });
+
 program.parse();
