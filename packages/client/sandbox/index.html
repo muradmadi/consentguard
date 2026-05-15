@@ -41,6 +41,11 @@
         Load ConsentGuard Client
         In a real app, you'd use: import '@consentguard/client'
     -->
+    <script>
+        window.__consentGuardConfig = {
+            apiKey: 'dev-proxy-secret'
+        };
+    </script>
     <script type="module" src="./consentguard.es.js"></script>
 
     <script>

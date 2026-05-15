@@ -13,11 +13,11 @@ export class ConsentManager {
    * Fetch consent state for a user.
    * Defaults to "deny all" if no state exists in Redis.
    */
-  async getConsent(userId: string): Promise<ConsentState> {
+  async getConsent(userId: string): Promise<ConsentState & { _exists: boolean }> {
     const data = await this.redis.get(`${this.KEY_PREFIX}${userId}`);
     
     if (!data) {
-      return this.getDefaultConsent(userId);
+      return { ...this.getDefaultConsent(userId), _exists: false };
     }
 
     try {
@@ -26,13 +26,13 @@ export class ConsentManager {
       
       if (!result.success) {
         console.warn(`Invalid consent state for user ${userId}, falling back to default.`);
-        return this.getDefaultConsent(userId);
+        return { ...this.getDefaultConsent(userId), _exists: false };
       }
 
-      return result.data;
+      return { ...result.data, _exists: true };
     } catch (error) {
       console.error(`Error parsing consent state for user ${userId}:`, error);
-      return this.getDefaultConsent(userId);
+      return { ...this.getDefaultConsent(userId), _exists: false };
     }
   }
 

@@ -64,7 +64,19 @@ Ensure the proxy correctly intercepts and scrubs the payload.
    - **Consent Denied:** Ensure PII fields defined in `defaultTransformations` are correctly stripped/hashed.
    - **Malformed Payload:** Ensure the proxy safely rejects or handles bad JSON without crashing.
 
-## Step 5: Update Documentation
+## Step 5: Update Meta Documentation
+
+To maintain a clear audit trail of all supported tools, update the central destination index.
+
+1. Open `.agent/meta/addeddestinations.md`.
+2. Add a new entry for the destination. Include:
+   - **ID**: The unique identifier used in code.
+   - **Name**: Human-readable name.
+   - **Category**: The required consent category.
+   - **Transformations**: Summary of scrubbing rules (strip/hash).
+   - **Patterns**: Client-side interception patterns.
+
+## Step 6: Update README & Public Docs
 
 Keep the community informed about supported platforms.
 

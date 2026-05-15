@@ -31,6 +31,7 @@ export const DestinationRuleSchema = z.object({
   transformations: z.array(z.object({
     path: z.string(), // JSON path (e.g., 'events.*.params.email')
     action: TransformationActionSchema,
+    pattern: z.string().optional(), // Optional regex pattern for redaction
   })).default([]),
 });
 

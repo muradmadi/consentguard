@@ -13,6 +13,7 @@ export interface ClientConfig {
   proxyUrl: string
   destinations: Record<string, string>
   userId?: string
+  apiKey?: string
   observeMutations?: boolean
 }
 
@@ -34,6 +35,9 @@ export function init(config?: Partial<ClientConfig>) {
   const userId = mergedConfig.userId || getOrSetUserId()
 
   console.log('[ConsentGuard] Initialized with User ID:', userId)
+
+  // Handle URL-based consent granting (useful for testing/debugging)
+  handleUrlConsent(userId, mergedConfig.proxyUrl.replace('/ingest', ''))
 
   if (mergedConfig.observeMutations) {
     observeMutations();
@@ -69,6 +73,10 @@ export function init(config?: Partial<ClientConfig>) {
       const headers = new Headers(init?.headers)
       headers.set('X-Consent-UserId', userId)
       headers.set('X-Original-Url', url)
+      
+      if (mergedConfig.apiKey) {
+        headers.set('Authorization', `Bearer ${mergedConfig.apiKey}`)
+      }
 
       return originalFetch(proxyUrl, {
         ...init,
@@ -103,6 +111,10 @@ export function init(config?: Partial<ClientConfig>) {
     if (this._cgDestination) {
       this.setRequestHeader('X-Consent-UserId', userId)
       this.setRequestHeader('X-Original-Url', this._cgOriginalUrl || '')
+      
+      if (mergedConfig.apiKey) {
+        this.setRequestHeader('Authorization', `Bearer ${mergedConfig.apiKey}`)
+      }
     }
     return originalSend.apply(this, [body])
   }
@@ -119,9 +131,12 @@ export function init(config?: Partial<ClientConfig>) {
         const proxyUrl = getProxyUrl(destination)
         
         // sendBeacon doesn't support custom headers easily without Blob/FormData
-        // For now, we append the userId to the query string if possible, or just send to proxy
+        // For now, we append the userId and apiKey to the query string if possible
         const finalUrl = new URL(proxyUrl)
         finalUrl.searchParams.set('cuid', userId)
+        if (mergedConfig.apiKey) {
+          finalUrl.searchParams.set('key', mergedConfig.apiKey)
+        }
         
         return originalSendBeacon.call(navigator, finalUrl.toString(), data)
       }
@@ -162,12 +177,64 @@ function observeMutations() {
  */
 function getOrSetUserId(): string {
   const KEY = 'cg_user_id'
+  
+  // 1. Check URL params first
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search)
+    const urlId = params.get('cg_user_id')
+    if (urlId) {
+      localStorage.setItem(KEY, urlId)
+      return urlId
+    }
+  }
+
+  // 2. Check localStorage
   let id = localStorage.getItem(KEY)
   if (!id) {
     id = 'u_' + Math.random().toString(36).substring(2, 11)
     localStorage.setItem(KEY, id)
   }
   return id
+}
+
+/**
+ * Helper to handle consent granting via URL parameters
+ */
+function handleUrlConsent(userId: string, adminUrl: string) {
+  if (typeof window === 'undefined') return
+  
+  const params = new URLSearchParams(window.location.search)
+  const consentStr = params.get('cg_consent')
+  
+  if (consentStr) {
+    console.log('[ConsentGuard] Found cg_consent in URL:', consentStr)
+    const purposes: Record<string, boolean> = {
+      necessary: true
+    }
+    
+    consentStr.split(',').forEach(p => {
+      purposes[p.trim()] = true
+    })
+    
+    // Send to proxy admin endpoint
+    // Note: In production, this would need an ADMIN_SECRET, 
+    // but for dev we use 'dev-admin-secret'
+    fetch(`${adminUrl}/consent/${userId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer dev-admin-secret'
+      },
+      body: JSON.stringify({
+        purposes,
+        timestamp: Date.now(),
+        metadata: { source: 'url_param' }
+      })
+    })
+    .then(r => r.json())
+    .then(data => console.log('[ConsentGuard] Consent updated via URL:', data))
+    .catch(err => console.error('[ConsentGuard] Failed to update consent via URL:', err))
+  }
 }
 
 // Support for TypeScript augmentation of XHR

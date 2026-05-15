@@ -1,97 +1,121 @@
-console.log("[ConsentGuard] Library loaded");
-const DEFAULT_CONFIG = {
-  proxyUrl: "http://localhost:3000/ingest",
-  destinations: {
-    "google-analytics.com": "ga4",
-    "api.mixpanel.com": "mixpanel",
-    "segment.io": "segment"
-  }
+const m = {
+  "google-analytics.com": "ga4",
+  "api.mixpanel.com": "mixpanel",
+  "segment.io": "segment",
+  "amplitude.com": "amplitude",
+  "facebook.net": "facebook_pixel"
 };
-function init(config) {
-  if (typeof window === "undefined") return;
-  const mergedConfig = {
-    ...DEFAULT_CONFIG,
-    ...config
-  };
-  const userId = mergedConfig.userId || getOrSetUserId();
-  console.log("[ConsentGuard] Initialized with User ID:", userId);
-  function getDestination(url) {
-    for (const [domain, id] of Object.entries(mergedConfig.destinations)) {
-      if (url.includes(domain)) return id;
-    }
+console.log("[ConsentGuard] Library loaded");
+const y = {
+  proxyUrl: "http://localhost:3000/ingest",
+  destinations: m,
+  observeMutations: !0
+};
+function U(s) {
+  if (typeof window > "u") return;
+  const e = {
+    ...y,
+    ...s
+  }, d = e.userId || C();
+  console.log("[ConsentGuard] Initialized with User ID:", d), S(d, e.proxyUrl.replace("/ingest", "")), e.observeMutations && w();
+  function t(n) {
+    for (const [o, r] of Object.entries(e.destinations))
+      if (n.includes(o)) return r;
     return null;
   }
-  function getProxyUrl(destination) {
-    return `${mergedConfig.proxyUrl}/${destination}`;
+  function l(n) {
+    return `${e.proxyUrl}/${n}`;
   }
-  const originalFetch = window.fetch;
-  window.fetch = async (input, init2) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const destination = getDestination(url);
-    if (destination) {
-      console.log(`[ConsentGuard] Intercepting Fetch: ${url} -> ${destination}`);
-      const proxyUrl = getProxyUrl(destination);
-      const headers = new Headers(init2 == null ? void 0 : init2.headers);
-      headers.set("X-Consent-UserId", userId);
-      headers.set("X-Original-Url", url);
-      return originalFetch(proxyUrl, {
-        ...init2,
-        headers
+  const i = window.fetch;
+  window.fetch = async (n, o) => {
+    const r = typeof n == "string" ? n : n instanceof URL ? n.toString() : n.url, a = t(r);
+    if (a) {
+      console.log(`[ConsentGuard] Intercepting Fetch: ${r} -> ${a}`);
+      const c = l(a), u = new Headers(o == null ? void 0 : o.headers);
+      return u.set("X-Consent-UserId", d), u.set("X-Original-Url", r), e.apiKey && u.set("Authorization", `Bearer ${e.apiKey}`), i(c, {
+        ...o,
+        headers: u
       });
     }
-    return originalFetch(input, init2);
+    return i(n, o);
   };
-  const XHR = XMLHttpRequest.prototype;
-  const originalOpen = XHR.open;
-  const originalSend = XHR.send;
-  XHR.open = function(method, url, ...args) {
-    const urlStr = url.toString();
-    const destination = getDestination(urlStr);
-    if (destination) {
-      this._cgDestination = destination;
-      this._cgOriginalUrl = urlStr;
-      const proxyUrl = getProxyUrl(destination);
-      console.log(`[ConsentGuard] Intercepting XHR: ${urlStr} -> ${destination}`);
-      return originalOpen.apply(this, [method, proxyUrl, ...args]);
+  const g = XMLHttpRequest.prototype, p = g.open, h = g.send;
+  if (g.open = function(n, o, ...r) {
+    const a = o.toString(), c = t(a);
+    if (c) {
+      this._cgDestination = c, this._cgOriginalUrl = a;
+      const u = l(c);
+      return console.log(`[ConsentGuard] Intercepting XHR: ${a} -> ${c}`), p.apply(this, [n, u, ...r]);
     }
-    return originalOpen.apply(this, [method, url, ...args]);
-  };
-  XHR.send = function(body) {
-    if (this._cgDestination) {
-      this.setRequestHeader("X-Consent-UserId", userId);
-      this.setRequestHeader("X-Original-Url", this._cgOriginalUrl);
-    }
-    return originalSend.apply(this, [body]);
-  };
-  if (navigator.sendBeacon) {
-    const originalSendBeacon = navigator.sendBeacon;
-    navigator.sendBeacon = function(url, data) {
-      const urlStr = url.toString();
-      const destination = getDestination(urlStr);
-      if (destination) {
-        console.log(`[ConsentGuard] Intercepting Beacon: ${urlStr} -> ${destination}`);
-        const proxyUrl = getProxyUrl(destination);
-        const finalUrl = new URL(proxyUrl);
-        finalUrl.searchParams.set("cuid", userId);
-        return originalSendBeacon.call(navigator, finalUrl.toString(), data);
+    return p.apply(this, [n, o, ...r]);
+  }, g.send = function(n) {
+    return this._cgDestination && (this.setRequestHeader("X-Consent-UserId", d), this.setRequestHeader("X-Original-Url", this._cgOriginalUrl || ""), e.apiKey && this.setRequestHeader("Authorization", `Bearer ${e.apiKey}`)), h.apply(this, [n]);
+  }, navigator.sendBeacon) {
+    const n = navigator.sendBeacon;
+    navigator.sendBeacon = function(o, r) {
+      const a = o.toString(), c = t(a);
+      if (c) {
+        console.log(`[ConsentGuard] Intercepting Beacon: ${a} -> ${c}`);
+        const u = l(c), f = new URL(u);
+        return f.searchParams.set("cuid", d), e.apiKey && f.searchParams.set("key", e.apiKey), n.call(navigator, f.toString(), r);
       }
-      return originalSendBeacon.call(navigator, url, data);
+      return n.call(navigator, o, r);
     };
   }
 }
-function getOrSetUserId() {
-  const KEY = "cg_user_id";
-  let id = localStorage.getItem(KEY);
-  if (!id) {
-    id = "u_" + Math.random().toString(36).substring(2, 11);
-    localStorage.setItem(KEY, id);
-  }
-  return id;
+function w() {
+  new MutationObserver((e) => {
+    e.forEach((d) => {
+      d.addedNodes.forEach((t) => {
+        if (t.nodeName === "SCRIPT") {
+          const l = t;
+          l.src && console.log("[ConsentGuard] Caught dynamic script:", l.src);
+        }
+      });
+    });
+  }).observe(document.documentElement, {
+    childList: !0,
+    subtree: !0
+  });
 }
-if (typeof window !== "undefined") {
-  const config = window.__consentGuardConfig;
-  init(config);
+function C() {
+  const s = "cg_user_id";
+  if (typeof window < "u") {
+    const t = new URLSearchParams(window.location.search).get("cg_user_id");
+    if (t)
+      return localStorage.setItem(s, t), t;
+  }
+  let e = localStorage.getItem(s);
+  return e || (e = "u_" + Math.random().toString(36).substring(2, 11), localStorage.setItem(s, e)), e;
+}
+function S(s, e) {
+  if (typeof window > "u") return;
+  const t = new URLSearchParams(window.location.search).get("cg_consent");
+  if (t) {
+    console.log("[ConsentGuard] Found cg_consent in URL:", t);
+    const l = {
+      necessary: !0
+    };
+    t.split(",").forEach((i) => {
+      l[i.trim()] = !0;
+    }), fetch(`${e}/consent/${s}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer dev-admin-secret"
+      },
+      body: JSON.stringify({
+        purposes: l,
+        timestamp: Date.now(),
+        metadata: { source: "url_param" }
+      })
+    }).then((i) => i.json()).then((i) => console.log("[ConsentGuard] Consent updated via URL:", i)).catch((i) => console.error("[ConsentGuard] Failed to update consent via URL:", i));
+  }
+}
+if (typeof window < "u") {
+  const s = window.__consentGuardConfig;
+  U(s);
 }
 export {
-  init
+  U as init
 };

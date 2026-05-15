@@ -1,6 +1,7 @@
 import { DestinationRule, TransformationAction } from '@consentguard/shared';
 import { applyStrip } from './transformations/strip';
 import { applyHash } from './transformations/hash';
+import { applyRedact } from './transformations/redact';
 
 /**
  * Scrub a payload based on destination rules.
@@ -14,7 +15,7 @@ export function scrubPayload(payload: any, rule: DestinationRule): any {
   const scrubbed = JSON.parse(JSON.stringify(payload));
 
   for (const transform of rule.transformations) {
-    applyTransformation(scrubbed, transform.path, transform.action);
+    applyTransformation(scrubbed, transform.path, transform.action, transform.pattern);
   }
 
   return scrubbed;
@@ -24,7 +25,7 @@ export function scrubPayload(payload: any, rule: DestinationRule): any {
  * Apply a transformation action to a specific path in an object.
  * Supports '*' as a wildcard for array elements.
  */
-function applyTransformation(obj: any, path: string, action: TransformationAction) {
+function applyTransformation(obj: any, path: string, action: TransformationAction, pattern?: string) {
   const parts = path.split('.');
   
   function traverse(current: any, remainingParts: string[]) {
@@ -49,9 +50,7 @@ function applyTransformation(obj: any, path: string, action: TransformationActio
           applyHash(current, head);
           break;
         case 'redact':
-          if (current[head] !== undefined) {
-            current[head] = '[REDACTED]';
-          }
+          applyRedact(current, head, pattern);
           break;
       }
     } else {

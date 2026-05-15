@@ -1,10 +1,14 @@
 import { DestinationRule } from '@consentguard/shared';
 import { ga4 } from './ga4';
 import { mixpanel } from './mixpanel';
+import { amplitude } from './amplitude';
+import { facebook } from './facebook';
 
 const REGISTRY: Record<string, DestinationRule> = {
   ga4,
   mixpanel,
+  amplitude,
+  facebook_pixel: facebook,
 };
 
 export function getDestinationRule(id: string): DestinationRule | null {
