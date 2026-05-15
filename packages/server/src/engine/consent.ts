@@ -1,20 +1,20 @@
-import Redis from 'ioredis';
 import { ConsentState, ConsentStateSchema } from '@consentguard/shared';
+import { StorageProvider } from './storage';
 
 export class ConsentManager {
-  private redis: Redis;
+  private storage: StorageProvider;
   private readonly KEY_PREFIX = 'consent:';
 
-  constructor(redisUrl: string) {
-    this.redis = new Redis(redisUrl);
+  constructor(storage: StorageProvider) {
+    this.storage = storage;
   }
 
   /**
    * Fetch consent state for a user.
-   * Defaults to "deny all" if no state exists in Redis.
+   * Defaults to "deny all" if no state exists in storage.
    */
   async getConsent(userId: string): Promise<ConsentState & { _exists: boolean }> {
-    const data = await this.redis.get(`${this.KEY_PREFIX}${userId}`);
+    const data = await this.storage.get(`${this.KEY_PREFIX}${userId}`);
     
     if (!data) {
       return { ...this.getDefaultConsent(userId), _exists: false };
@@ -41,10 +41,9 @@ export class ConsentManager {
    */
   async setConsent(userId: string, state: ConsentState): Promise<void> {
     // 1-year TTL by default (31536000 seconds)
-    await this.redis.set(
+    await this.storage.set(
       `${this.KEY_PREFIX}${userId}`,
       JSON.stringify(state),
-      'EX',
       31536000
     );
   }

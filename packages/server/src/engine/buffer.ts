@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import { StorageProvider } from './storage';
 
 export interface BufferedRequest {
   id: string;
@@ -11,12 +11,12 @@ export interface BufferedRequest {
 }
 
 export class BufferManager {
-  private redis: Redis;
+  private storage: StorageProvider;
   private readonly PREFIX = 'cg_buffer:';
   private readonly TTL = 3600; // 1 hour
 
-  constructor(redisUrl: string) {
-    this.redis = new Redis(redisUrl);
+  constructor(storage: StorageProvider) {
+    this.storage = storage;
   }
 
   /**
@@ -30,8 +30,8 @@ export class BufferManager {
     };
 
     const key = `${this.PREFIX}${userId}`;
-    await this.redis.rpush(key, JSON.stringify(request));
-    await this.redis.expire(key, this.TTL);
+    await this.storage.rpush(key, JSON.stringify(request));
+    await this.storage.expire(key, this.TTL);
     
     console.log(`[ConsentGuard] Buffered request for ${userId} (Destination: ${data.destination})`);
   }
@@ -41,8 +41,8 @@ export class BufferManager {
    */
   async getAndClearBuffer(userId: string): Promise<BufferedRequest[]> {
     const key = `${this.PREFIX}${userId}`;
-    const data = await this.redis.lrange(key, 0, -1);
-    await this.redis.del(key);
+    const data = await this.storage.lrange(key, 0, -1);
+    await this.storage.del(key);
     
     return data.map(entry => JSON.parse(entry));
   }
@@ -51,7 +51,7 @@ export class BufferManager {
    * Check if a user has buffered requests.
    */
   async hasBuffer(userId: string): Promise<boolean> {
-    const count = await this.redis.llen(`${this.PREFIX}${userId}`);
+    const count = await this.storage.llen(`${this.PREFIX}${userId}`);
     return count > 0;
   }
 }

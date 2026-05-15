@@ -1,34 +1,20 @@
 import { defaultConfig } from '@consentguard/shared';
-import * as fs from 'fs';
-import * as path from 'path';
-
-/**
- * Load configuration from file if exists
- */
-const loadFileConfig = () => {
-  const configPath = path.join(process.cwd(), '.consentguardrc.json');
-  if (fs.existsSync(configPath)) {
-    try {
-      const content = fs.readFileSync(configPath, 'utf-8');
-      return JSON.parse(content);
-    } catch (error) {
-      console.error('[ConsentGuard] Failed to parse .consentguardrc.json:', error);
-    }
-  }
-  return {};
-};
-
-const fileConfig = loadFileConfig();
 
 /**
  * Proxy Server Configuration
+ * This is now runtime-agnostic. Runtimes should inject their own env vars.
  */
-export const serverConfig = {
-  port: process.env.PORT || fileConfig.port ? parseInt(process.env.PORT || fileConfig.port) : defaultConfig.proxy.port,
-  redisUrl: process.env.REDIS_URL || fileConfig.redisUrl || 'redis://localhost:6379',
-  proxySecret: process.env.PROXY_SECRET || fileConfig.proxySecret || 'dev-proxy-secret',
-  adminSecret: process.env.ADMIN_SECRET || fileConfig.adminSecret || 'dev-admin-secret',
-  env: process.env.NODE_ENV || fileConfig.env || 'development',
-  bufferPending: process.env.BUFFER_PENDING !== 'false' && fileConfig.bufferPending !== false,
-  hashSalt: process.env.CG_HASH_SALT || fileConfig.hashSalt || 'default-salt',
+export const getServerConfig = (env: any = {}) => {
+  return {
+    port: parseInt(env.PORT || env.port || '3000'),
+    redisUrl: env.REDIS_URL || env.redisUrl || 'redis://localhost:6379',
+    proxySecret: env.PROXY_SECRET || env.proxySecret || 'dev-proxy-secret',
+    adminSecret: env.ADMIN_SECRET || env.adminSecret || 'dev-admin-secret',
+    env: env.NODE_ENV || env.env || 'development',
+    bufferPending: env.BUFFER_PENDING !== 'false' && env.bufferPending !== false,
+    hashSalt: env.CG_HASH_SALT || env.hashSalt || 'default-salt',
+  };
 };
+
+// For backward compatibility and Node.js default usage
+export const serverConfig = getServerConfig(typeof process !== 'undefined' ? process.env : {});

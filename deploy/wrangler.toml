@@ -1,0 +1,13 @@
+name = "consentguard-proxy"
+main = "packages/server/src/runtime/workers.ts"
+compatibility_date = "2024-05-15"
+
+[vars]
+# REDIS_URL = "..." # Optional: Connect to external Redis (e.g. Upstash)
+PROXY_SECRET = "dev-secret"
+ADMIN_SECRET = "admin-secret"
+BUFFER_PENDING = "true"
+
+# [kv_namespaces]
+# binding = "CONSENT_STORE"
+# id = "..."
