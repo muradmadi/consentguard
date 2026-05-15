@@ -10,17 +10,21 @@ import { AuditLogger } from './engine/audit'
 import { BufferManager } from './engine/buffer'
 import { RuleManager } from './engine/rules'
 import { createWebhookRouter } from './webhooks/cmp'
-import { StorageProvider } from './engine/storage'
+import { StorageProvider, HybridStorageProvider } from './engine/storage'
 import { getServerConfig } from './config'
 
 export function createApp(storage: StorageProvider, env: any = {}) {
   const app = new Hono()
   const config = getServerConfig(env)
   
-  const consentManager = new ConsentManager(storage)
-  const auditLogger = new AuditLogger(storage)
-  const bufferManager = new BufferManager(storage)
-  const ruleManager = new RuleManager(storage)
+  const effectiveStorage = config.enableCache 
+    ? new HybridStorageProvider(storage, { ttlMs: config.cacheTtl }) 
+    : storage
+
+  const consentManager = new ConsentManager(effectiveStorage)
+  const auditLogger = new AuditLogger(effectiveStorage)
+  const bufferManager = new BufferManager(effectiveStorage)
+  const ruleManager = new RuleManager(effectiveStorage)
 
   app.use('*', logger())
   app.route('/webhooks', createWebhookRouter(storage))

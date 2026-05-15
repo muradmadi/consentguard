@@ -50,6 +50,24 @@ This file tracks all analytics and marketing destinations currently supported by
   - `data.*.user_data.ph`: `hash`
   - `data.*.user_data.client_ip_address`: `strip`
 
+## [tiktok] TikTok Pixel
+- **Name**: TikTok Pixel
+- **Category**: `marketing`
+- **Patterns**: `analytics.tiktok.com`
+- **Upstream**: `https://business-api.tiktok.com/open_api/v1.3/event/track`
+- **Transformations**:
+  - `user_data.email`: `hash`
+  - `user_data.phone`: `hash`
+  - `user_data.ip`: `strip`
+
+## [hotjar] Hotjar
+- **Name**: Hotjar
+- **Category**: `analytics`
+- **Patterns**: `hotjar.io`, `hotjar.com`
+- **Transformations**:
+  - `userId`: `hash`
+  - `email`: `strip`
+
 ---
 
 *Last Updated: 2026-05-14*

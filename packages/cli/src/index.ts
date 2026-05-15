@@ -50,6 +50,29 @@ program
     fs.writeFileSync(configPath, JSON.stringify(response, null, 2));
 
     console.log(pc.green(`\n✅ Created ${pc.bold('.consentguardrc.json')}`));
+
+    // Generate Production Assets
+    const generateProduction = await prompts({
+      type: 'confirm',
+      name: 'value',
+      message: 'Generate production Docker assets?',
+      initial: true
+    });
+
+    if (generateProduction.value) {
+      const dockerfile = `FROM node:20-slim\nWORKDIR /app\nRUN npm install -g @consentguard/cli\nEXPOSE ${response.port}\nCMD ["consentguard", "start", "--port", "${response.port}"]`;
+      const dockerCompose = `services:\n  proxy:\n    build: .\n    ports:\n      - "${response.port}:${response.port}"\n    environment:\n      - REDIS_URL=redis://redis:6379\n      - PROXY_SECRET=${response.proxySecret}\n      - ADMIN_SECRET=${response.adminSecret}\n    depends_on:\n      - redis\n  redis:\n    image: redis:7-alpine\n    volumes:\n      - redis_data:/data\nvolumes:\n  redis_data:`;
+      const envProd = `PORT=${response.port}\nREDIS_URL=redis://localhost:6379\nPROXY_SECRET=${response.proxySecret}\nADMIN_SECRET=${response.adminSecret}\nCG_ENABLE_CACHE=true\nCG_CACHE_TTL=60000`;
+
+      fs.writeFileSync(path.join(process.cwd(), 'Dockerfile'), dockerfile);
+      fs.writeFileSync(path.join(process.cwd(), 'docker-compose.yml'), dockerCompose);
+      fs.writeFileSync(path.join(process.cwd(), '.env.production'), envProd);
+
+      console.log(pc.green(`✅ Created ${pc.bold('Dockerfile')}`));
+      console.log(pc.green(`✅ Created ${pc.bold('docker-compose.yml')}`));
+      console.log(pc.green(`✅ Created ${pc.bold('.env.production')}`));
+    }
+
     console.log(pc.dim('\nYou can now run: ') + pc.bold('consentguard start'));
   });
 

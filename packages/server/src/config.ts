@@ -13,6 +13,8 @@ export const getServerConfig = (env: any = {}) => {
     env: env.NODE_ENV || env.env || 'development',
     bufferPending: env.BUFFER_PENDING !== 'false' && env.bufferPending !== false,
     hashSalt: env.CG_HASH_SALT || env.hashSalt || 'default-salt',
+    enableCache: env.CG_ENABLE_CACHE === 'true' || env.enableCache === true,
+    cacheTtl: parseInt(env.CG_CACHE_TTL || env.cacheTtl || '60000'),
   };
 };
 

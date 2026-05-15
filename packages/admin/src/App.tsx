@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { Shield, ArrowUpRight, ChevronRight } from 'lucide-react'
 import { fetchStats, fetchRules, fetchAuditLogs, updateRule } from './lib/api'
 import { RuleEditor } from './components/RuleEditor'
+import { LiveTraffic } from './components/LiveTraffic'
+import { AlertCircle } from 'lucide-react'
 import type { DestinationRule } from '@consentguard/shared'
 
 function App() {
@@ -74,30 +76,34 @@ function App() {
               </div>
             </div>
 
-            <div className="stats-grid">
-              <div className="card">
-                <h3>Forwarded</h3>
-                <div className="stat-value" style={{ color: '#0070f3' }}>
-                  {stats?.forwarded || 0}
+            <div className="stats-grid" style={{ gridTemplateColumns: '2fr 1fr', gap: '24px', alignItems: 'start' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px' }}>
+                <div className="card">
+                  <h3>Forwarded</h3>
+                  <div className="stat-value" style={{ color: '#0070f3' }}>
+                    {stats?.forwarded || 0}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '8px', fontSize: '12px' }}>
+                    <ArrowUpRight size={14} /> <span>12% from last hour</span>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '8px', fontSize: '12px' }}>
-                  <ArrowUpRight size={14} /> <span>12% from last hour</span>
+                <div className="card">
+                  <h3>Blocked</h3>
+                  <div className="stat-value" style={{ color: '#ee0000' }}>
+                    {stats?.blocked || 0}
+                  </div>
+                  <p style={{ marginTop: '8px', fontSize: '12px' }}>Prevented non-compliant data leaks</p>
+                </div>
+                <div className="card" style={{ gridColumn: 'span 2' }}>
+                  <h3>System Errors</h3>
+                  <div className="stat-value">
+                    {stats?.errors || 0}
+                  </div>
+                  <p style={{ marginTop: '8px', fontSize: '12px' }}>Upstream connection issues or proxy failures</p>
                 </div>
               </div>
-              <div className="card">
-                <h3>Blocked</h3>
-                <div className="stat-value" style={{ color: '#ee0000' }}>
-                  {stats?.blocked || 0}
-                </div>
-                <p style={{ marginTop: '8px', fontSize: '12px' }}>Prevented non-compliant data leaks</p>
-              </div>
-              <div className="card">
-                <h3>Errors</h3>
-                <div className="stat-value">
-                  {stats?.errors || 0}
-                </div>
-                <p style={{ marginTop: '8px', fontSize: '12px' }}>Upstream connection issues</p>
-              </div>
+              
+              <LiveTraffic logs={logs} />
             </div>
 
             <h2 style={{ margin: '48px 0 24px' }}>Recent Audit Logs</h2>
@@ -217,6 +223,21 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
+                    {/* Highlight Unknown Destinations from Logs */}
+                    {Array.from(new Set(logs.map(l => l.destination)))
+                      .filter(d => !rules.find(r => r.id === d))
+                      .map(unknown => (
+                        <tr key={unknown} style={{ background: 'rgba(238, 0, 0, 0.05)' }}>
+                          <td style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <AlertCircle size={14} color="#ee0000" />
+                            {unknown}
+                          </td>
+                          <td style={{ color: 'var(--accents-4)', fontSize: '12px' }}>Unknown (Captured from traffic)</td>
+                          <td>
+                            <span className="badge badge-error">Action Required</span>
+                          </td>
+                        </tr>
+                      ))}
                     {rules.map(rule => (
                       <tr key={rule.id}>
                         <td style={{ fontWeight: 600 }}>{rule.id}</td>
