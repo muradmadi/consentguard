@@ -8,4 +8,6 @@ export const INTERCEPTION_PATTERNS: Record<string, string> = {
   'segment.io': 'segment',
   'amplitude.com': 'amplitude',
   'facebook.net': 'facebook_pixel',
+  'tiktok.com': 'tiktok',
+  'hotjar.com': 'hotjar',
 };

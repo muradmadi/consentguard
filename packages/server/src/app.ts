@@ -23,7 +23,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     ? new HybridStorageProvider(storage, { ttlMs: config.cacheTtl }) 
     : storage
 
-  const consentManager = new ConsentManager(effectiveStorage)
+  const consentManager = new ConsentManager(effectiveStorage, config.defaultConsent as 'allow' | 'deny')
   const auditLogger = new AuditLogger(effectiveStorage)
   const bufferManager = new BufferManager(effectiveStorage)
   const ruleManager = new RuleManager(effectiveStorage)
@@ -129,8 +129,6 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     const auth = c.req.header('Authorization')
     if (auth !== `Bearer ${config.adminSecret}`) return c.json({ error: 'Unauthorized' }, 403)
     
-    // In a real app, we'd pull these from Redis or a metrics store.
-    // For now, we'll return the in-memory metrics.
     return c.json(metrics.getMetrics())
   })
 
@@ -176,23 +174,45 @@ export function createApp(storage: StorageProvider, env: any = {}) {
    */
   app.post('/ingest/:destination', async (c) => {
     const destination = c.req.param('destination')
-    const userId = c.req.header('X-Consent-UserId') || 'anonymous'
-    const payload = await c.req.json()
-
+    
     // 0. Authenticate Proxy Request
     const auth = c.req.header('Authorization') || `Bearer ${c.req.query('key')}`
     if (auth !== `Bearer ${config.proxySecret}`) {
-      console.warn(`[ConsentGuard] Unauthorized ingestion attempt for ${destination}`)
+      console.info(`[ConsentGuard] Unauthorized ingestion attempt for ${destination}`)
       return c.json({ error: 'Unauthorized' }, 403)
     }
 
-    // 1. Resolve Consent
+    // 1. Validate JSON payload
+    let payload: any
+    try {
+      payload = await c.req.json()
+    } catch (e: any) {
+      console.info(`[ConsentGuard] Invalid JSON payload received: ${e.message}`)
+      return c.json({ error: 'Invalid JSON payload' }, 400)
+    }
+
+    // 2. Validate X-Consent-UserId header
+    const userId = c.req.header('X-Consent-UserId')
+    if (!userId) {
+      console.warn(`[ConsentGuard] Missing X-Consent-UserId header, denying request.`)
+      metrics.recordRequest(destination, 'blocked')
+      return c.body(null, 204)
+    }
+
+    // 3. Check if destination config is missing
+    const isSupported = await ruleManager.isSupported(destination)
+    if (!isSupported) {
+      console.warn(`[ConsentGuard] Unsupported destination: ${destination}`)
+      return c.json({ error: 'unsupported_destination' }, 400)
+    }
+
+    // 4. Resolve Consent
     const consent = await consentManager.getConsent(userId)
 
-    // 2. Resolve Rule (Dynamic)
+    // 5. Resolve Rule (Dynamic)
     const rule = await ruleManager.getRule(destination)
 
-    // 3. Check Category Consent
+    // 6. Check Category Consent
     if (!consentManager.hasConsent(consent, rule.category)) {
       // Check if we should buffer (new user and pending consent)
       if (!consent._exists && config.bufferPending !== false) {
@@ -234,11 +254,11 @@ export function createApp(storage: StorageProvider, env: any = {}) {
       return c.body(null, 204)
     }
 
-    // 4. Scrub Payload
+    // 7. Scrub Payload
     const scrubbed = scrubPayload(payload, rule)
     const transformationsApplied = rule.transformations?.map(t => `${t.action}:${t.path}`) || []
 
-    // 5. Forward
+    // 8. Forward
     const targetUrl = c.req.header('X-Original-Url') || rule.upstreamUrl
     if (!targetUrl) {
       console.error(`[ConsentGuard] No target URL found for ${destination}`)
@@ -268,11 +288,17 @@ export function createApp(storage: StorageProvider, env: any = {}) {
         body: JSON.stringify(scrubbed),
       })
 
-      return c.body(null, response.status as any)
+      if (response.ok) {
+        return c.body(null, 204)
+      } else {
+        console.error(`[ConsentGuard] Upstream destination ${destination} returned error status ${response.status}`)
+        metrics.recordError()
+        return c.body(null, 502)
+      }
     } catch (error) {
       console.error(`[ConsentGuard] Failed to forward to ${destination}:`, error)
       metrics.recordError()
-      return c.json({ error: 'Upstream connection failed' }, 502)
+      return c.body(null, 502)
     }
   })
 

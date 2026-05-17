@@ -11,6 +11,15 @@ export class RuleManager {
   }
 
   /**
+   * Check if a destination is supported (has registry rule or override).
+   */
+  async isSupported(id: string): Promise<boolean> {
+    const override = await this.storage.get(`${this.KEY_PREFIX}${id}`);
+    if (override) return true;
+    return registry.getDestinationRule(id) !== null;
+  }
+
+  /**
    * Get a rule for a destination, applying overrides if they exist.
    */
   async getRule(id: string): Promise<DestinationRule> {

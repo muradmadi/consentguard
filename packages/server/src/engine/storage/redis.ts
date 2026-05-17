@@ -9,7 +9,21 @@ export class RedisStorageProvider implements StorageProvider {
   }
 
   async get(key: string): Promise<string | null> {
-    return this.redis.get(key);
+    let timeoutId: any;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error('Redis operation timed out (100ms)'));
+      }, 100);
+    });
+
+    try {
+      return await Promise.race([
+        this.redis.get(key),
+        timeoutPromise,
+      ]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   async set(key: string, value: string, ttlSeconds?: number): Promise<void> {
