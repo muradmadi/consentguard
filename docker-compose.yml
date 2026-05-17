@@ -1,8 +1,17 @@
 services:
+  proxy:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - PROXY_SECRET=dev-proxy-secret
+      - ADMIN_SECRET=dev-admin-secret
+      - CG_ENABLE_CACHE=true
+    depends_on:
+      - redis
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
 volumes:

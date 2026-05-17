@@ -1,6 +1,8 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
+import { serveStatic } from '@hono/node-server/serve-static'
+import * as path from 'path'
 import { ConsentStateSchema } from '@consentguard/shared'
 import { ConsentManager } from './engine/consent'
 import { getDestinationRule, getDefaultRule } from './destinations/registry'
@@ -28,6 +30,28 @@ export function createApp(storage: StorageProvider, env: any = {}) {
 
   app.use('*', logger())
   app.route('/webhooks', createWebhookRouter(storage))
+
+  // Dynamically resolve paths depending on where the process was started
+  const normalizedCwd = (typeof process !== 'undefined' ? process.cwd() : '').replace(/\\/g, '/');
+  const isServerSubdir = normalizedCwd.endsWith('/packages/server') || normalizedCwd.endsWith('/server');
+  
+  const adminDistPath = isServerSubdir ? '../admin/dist' : './packages/admin/dist';
+  const clientBundlePath = isServerSubdir 
+    ? '../client/dist/consentguard.iife.js' 
+    : './packages/client/dist/consentguard.iife.js';
+
+  // Serve Admin Dashboard
+  app.use('/dashboard/*', serveStatic({ 
+    root: adminDistPath,
+    rewriteRequestPath: (path) => path.replace(/^\/dashboard/, '')
+  }))
+  app.get('/dashboard', (c) => c.redirect('/dashboard/index.html'))
+
+  // Serve Client Interceptor Bundle
+  app.use('/consentguard-client.js', serveStatic({ 
+    path: clientBundlePath 
+  }))
+
   app.use('*', cors({
     origin: '*',
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -124,6 +148,27 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     
     const logs = await auditLogger.getLogs(100)
     return c.json(logs)
+  })
+
+  /**
+   * Debug & Testing API
+   */
+  app.delete('/api/debug/reset', async (c) => {
+    const auth = c.req.header('Authorization')
+    if (auth !== `Bearer ${config.adminSecret}`) return c.json({ error: 'Unauthorized' }, 403)
+    
+    console.log('[ConsentGuard] DEBUG: System reset triggered')
+    
+    // 1. Reset In-Memory Metrics
+    metrics.reset()
+    
+    // 2. Clear Audit Logs
+    await auditLogger.clear()
+    
+    // 3. Flush Storage (Consent, Buffers, Overrides)
+    await storage.flushAll()
+    
+    return c.json({ status: 'reset_complete' })
   })
 
   /**

@@ -4,8 +4,6 @@ trigger: always_on
 
 # ConsentGuard Core Architecture & Agent Rules
 
-\*\* NODE can be found in $env:PATH="C:\Users\murad\AppData\Roaming\fnm\aliases\default;$env:PATH";"
-
 **⚠️ CRITICAL INSTRUCTION FOR AI AGENTS & DEVELOPERS ⚠️**
 This document contains the non-negotiable architectural constraints for the ConsentGuard project. **You must strictly adhere to these rules in every code modification, suggestion, or refactoring.**
 

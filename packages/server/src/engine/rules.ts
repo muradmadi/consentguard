@@ -38,10 +38,7 @@ export class RuleManager {
    * List all rules (registry + active overrides).
    */
   async getAllRules(): Promise<DestinationRule[]> {
-    // This is tricky because we don't necessarily know all registry keys without exporting them.
-    // For now, let's just use the known list from registry and add any overrides.
-    // In a real scenario, we might want a more robust way to list registry keys.
-    const registryRules = ['ga4', 'mixpanel', 'amplitude', 'facebook_pixel'];
+    const registryRules = registry.REGISTRY_KEYS;
     const rules: DestinationRule[] = [];
 
     for (const id of registryRules) {

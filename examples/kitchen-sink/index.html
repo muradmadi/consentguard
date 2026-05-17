@@ -3,170 +3,517 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ConsentGuard Kitchen Sink Demo</title>
+    <title>ConsentGuard | Ultimate Testing Kitchen Sink</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        body { background: #000; color: #fff; font-family: 'Inter', sans-serif; }
-        .card { background: #111; border: 1px solid #333; border-radius: 12px; padding: 24px; }
-        .log-entry { font-family: monospace; font-size: 12px; padding: 4px 8px; border-radius: 4px; margin-bottom: 4px; }
+        :root {
+            --bg: #050505;
+            --card-bg: rgba(15, 15, 15, 0.7);
+            --card-border: rgba(255, 255, 255, 0.1);
+            --accent: #0070f3;
+            --accent-glow: rgba(0, 112, 243, 0.3);
+        }
+
+        body { 
+            background: var(--bg); 
+            color: #fff; 
+            font-family: 'Outfit', sans-serif;
+            background-image: 
+                radial-gradient(circle at 20% 20%, rgba(0, 112, 243, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 80% 80%, rgba(139, 92, 246, 0.05) 0%, transparent 40%);
+            min-height: 100vh;
+        }
+
+        .glass {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .glass:hover {
+            border-color: rgba(255, 255, 255, 0.2);
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .btn-primary {
+            background: #fff;
+            color: #000;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn-primary:hover {
+            background: #eaeaea;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255,255,255,0.1);
+        }
+
+        .btn-primary:active { transform: translateY(0); }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--card-border);
+            color: #ccc;
+            transition: all 0.2s;
+        }
+
+        .btn-outline:hover {
+            background: rgba(255,255,255,0.05);
+            border-color: #fff;
+            color: #fff;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #444; }
+
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100%); }
+        }
+
+        .scanline {
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 100px;
+            background: linear-gradient(to bottom, transparent, rgba(0, 112, 243, 0.05), transparent);
+            animation: scanline 8s linear infinite;
+            pointer-events: none;
+        }
+
+        .destination-grid button {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .destination-grid button::after {
+            content: '';
+            position: absolute;
+            bottom: 0; left: 0; width: 100%; height: 2px;
+            background: var(--accent);
+            transform: scaleX(0);
+            transition: transform 0.3s;
+        }
+
+        .destination-grid button:hover::after {
+            transform: scaleX(1);
+        }
     </style>
 
-    <!-- ConsentGuard Config -->
     <script>
-        window.__consentGuardConfig = {
+        const CONFIG = {
             proxyUrl: 'http://localhost:3000',
-            proxySecret: 'dev-proxy-secret'
+            proxySecret: 'dev-proxy-secret',
+            adminSecret: 'dev-admin-secret',
+            userId: 'kitchen-sink-user-' + Math.random().toString(36).substring(7)
         };
-    </script>
 
-    <!-- MOCK: ConsentGuard Client (Simplified) -->
-    <script>
-        // In a real app, you'd import '@consentguard/client'
-        // This is a minimal mock of the interceptor for the demo
-        const originalFetch = window.fetch;
-        window.fetch = async (url, options) => {
-            if (url.includes('google-analytics.com') || url.includes('mixpanel.com') || url.includes('tiktok.com')) {
-                const destination = url.includes('google-analytics') ? 'ga4' : 
-                                  url.includes('mixpanel') ? 'mixpanel' : 'tiktok';
-                
-                console.log(`[ConsentGuard Demo] Intercepting ${destination} request...`);
-                
-                return originalFetch(`http://localhost:3000/ingest/${destination}`, {
+        let autoPolling = true;
+
+        async function init() {
+            lucide.createIcons();
+            updateUserIdDisplay();
+            startPolling();
+        }
+
+        function updateUserIdDisplay() {
+            document.getElementById('display-uid').innerText = CONFIG.userId;
+        }
+
+        async function trackEvent(destination, silent = false) {
+            const mockData = {
+                ga4: { event: 'page_view', params: { page_title: 'Home', email: 'test@example.com' } },
+                mixpanel: { event: 'Button Clicked', properties: { distinct_id: CONFIG.userId, plan: 'Premium' } },
+                tiktok: { event: 'AddToCart', content_id: 'prod_123', value: 99.99 },
+                facebook_pixel: { event: 'Purchase', value: 150, currency: 'USD' },
+                hotjar: { event: 'Feedback Submitted', score: 5 },
+                amplitude: { event_type: 'Level Up', event_properties: { level: 42 } },
+                unknown: { event: 'sneaky_ping', data: 'tracking_you' }
+            };
+
+            const payload = mockData[destination] || mockData.unknown;
+            if (!silent) log(`Triggering ${destination}...`, 'info');
+
+            try {
+                const res = await fetch(`${CONFIG.proxyUrl}/ingest/${destination}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer dev-proxy-secret`,
-                        'X-Consent-UserId': 'demo-user-123',
-                        'X-Original-Url': url
+                        'Authorization': `Bearer ${CONFIG.proxySecret}`,
+                        'X-Consent-UserId': CONFIG.userId,
+                        'X-Original-Url': `https://${destination}.com/collect`
                     },
-                    body: options.body || JSON.stringify({ event: 'demo_event', data: 'confidential' })
+                    body: JSON.stringify(payload)
                 });
+
+                if (!silent) {
+                    if (res.status === 202) log(`${destination} -> BUFFERED (Pending Consent)`, 'warn');
+                    else if (res.status === 204) log(`${destination} -> BLOCKED (Consent Denied)`, 'error');
+                    else if (res.status === 200) log(`${destination} -> FORWARDED (Success)`, 'success');
+                    else log(`${destination} -> HTTP ${res.status}`, 'error');
+                }
+            } catch (e) {
+                if (!silent) log(`Proxy Connection Error: ${e.message}`, 'error');
             }
-            return originalFetch(url, options);
-        };
-    </script>
-</head>
-<body class="p-8">
-    <div class="max-w-4xl mx-auto">
-        <header class="flex justify-between items-center mb-12">
-            <div>
-                <h1 class="text-3xl font-bold tracking-tight">ConsentGuard <span class="text-blue-500">Sandbox</span></h1>
-                <p class="text-gray-400 mt-2">Test your privacy enforcement in real-time.</p>
-            </div>
-            <div class="flex gap-4">
-                <span id="status-badge" class="bg-green-500/10 text-green-500 px-3 py-1 rounded-full text-sm font-medium border border-green-500/20">Proxy Online</span>
-            </div>
-        </header>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <!-- Consent Control -->
-            <div class="card">
-                <h2 class="text-xl font-semibold mb-6 flex items-center gap-2">
-                    🛡️ Consent Settings
-                </h2>
-                <div class="space-y-4">
-                    <div class="flex justify-between items-center p-4 bg-black/50 rounded-lg border border-gray-800">
-                        <span>Analytics (GA4, Mixpanel)</span>
-                        <input type="checkbox" id="consent-analytics" class="w-5 h-5 accent-blue-500">
-                    </div>
-                    <div class="flex justify-between items-center p-4 bg-black/50 rounded-lg border border-gray-800">
-                        <span>Marketing (TikTok)</span>
-                        <input type="checkbox" id="consent-marketing" class="w-5 h-5 accent-blue-500">
-                    </div>
-                </div>
-                <button onclick="updateConsent()" class="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition">
-                    Update Preferences
-                </button>
-            </div>
-
-            <!-- Event Trigger -->
-            <div class="card">
-                <h2 class="text-xl font-semibold mb-6 flex items-center gap-2">
-                    🚀 Trigger Events
-                </h2>
-                <p class="text-gray-400 mb-6 text-sm">Click these to simulate tracking calls from various SDKs.</p>
-                <div class="grid grid-cols-2 gap-4">
-                    <button onclick="trackEvent('ga4')" class="p-4 bg-gray-800 hover:bg-gray-700 rounded-lg border border-gray-700 text-sm">
-                        Google Analytics
-                    </button>
-                    <button onclick="trackEvent('mixpanel')" class="p-4 bg-gray-800 hover:bg-gray-700 rounded-lg border border-gray-700 text-sm">
-                        Mixpanel
-                    </button>
-                    <button onclick="trackEvent('tiktok')" class="p-4 bg-gray-800 hover:bg-gray-700 rounded-lg border border-gray-700 text-sm">
-                        TikTok Pixel
-                    </button>
-                    <button onclick="trackEvent('unknown')" class="p-4 bg-gray-800 hover:bg-gray-700 rounded-lg border border-gray-700 text-sm">
-                        Unknown SDK
-                    </button>
-                </div>
-            </div>
-
-            <!-- Console -->
-            <div class="card md:col-span-2">
-                <h2 class="text-xl font-semibold mb-4">Network Activity Log</h2>
-                <div id="console" class="bg-black p-4 rounded-lg border border-gray-800 h-48 overflow-y-auto space-y-1">
-                    <div class="text-gray-500 italic">Waiting for events...</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        function log(msg, type = 'info') {
-            const con = document.getElementById('console');
-            const colors = { info: 'text-blue-400', success: 'text-green-400', error: 'text-red-400', warn: 'text-yellow-400' };
-            const div = document.createElement('div');
-            div.className = `log-entry ${colors[type]}`;
-            div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
-            con.prepend(div);
         }
 
-        async function updateConsent() {
-            const analytics = document.getElementById('consent-analytics').checked;
-            const marketing = document.getElementById('consent-marketing').checked;
-            
-            log(`Updating consent: analytics=${analytics}, marketing=${marketing}...`);
+        async function updateConsent(preset = null) {
+            let purposes = {};
+            if (preset === 'all') {
+                purposes = { analytics: true, marketing: true, necessary: true };
+                document.getElementById('c-analytics').checked = true;
+                document.getElementById('c-marketing').checked = true;
+            } else if (preset === 'none') {
+                purposes = { analytics: false, marketing: false, necessary: true };
+                document.getElementById('c-analytics').checked = false;
+                document.getElementById('c-marketing').checked = false;
+            } else {
+                purposes = {
+                    analytics: document.getElementById('c-analytics').checked,
+                    marketing: document.getElementById('c-marketing').checked,
+                    necessary: true
+                };
+            }
+
+            log(`Saving preferences for ${CONFIG.userId}...`, 'info');
             
             try {
-                const res = await fetch('http://localhost:3000/consent/demo-user-123', {
+                const res = await fetch(`${CONFIG.proxyUrl}/consent/${CONFIG.userId}`, {
                     method: 'PUT',
                     headers: { 
                         'Content-Type': 'application/json',
-                        'Authorization': 'Bearer dev-admin-secret'
+                        'Authorization': `Bearer ${CONFIG.adminSecret}`
                     },
-                    body: JSON.stringify({
-                        purposes: { analytics, marketing, necessary: true }
-                    })
+                    body: JSON.stringify({ purposes, timestamp: Date.now() })
                 });
-                if (res.ok) log('Consent state saved to Redis!', 'success');
+
+                if (res.ok) {
+                    const data = await res.json();
+                    log(`Consent Saved! (Replayed: ${data.replayed || 0})`, 'success');
+                } else {
+                    log(`Failed to save consent`, 'error');
+                }
             } catch (e) {
-                log('Failed to update consent. Is the proxy running?', 'error');
+                log(`Network Error: ${e.message}`, 'error');
             }
         }
 
-        function trackEvent(dest) {
-            const urls = {
-                ga4: 'https://www.google-analytics.com/g/collect',
-                mixpanel: 'https://api.mixpanel.com/track',
-                tiktok: 'https://graph.facebook.com/tiktok/events',
-                unknown: 'https://api.tracker-x.com/v1/event'
-            };
-            
-            log(`Triggering tracking call to ${dest}...`);
-            fetch(urls[dest], {
-                method: 'POST',
-                body: JSON.stringify({ 
-                    event: 'page_view', 
-                    user: { email: 'user@example.com', ip: '1.2.3.4' } 
-                })
-            }).then(r => {
-                if (r.status === 204) log(`✅ ${dest} request scrubbed/forwarded`, 'success');
-                else if (r.status === 202) log(`⏳ ${dest} request buffered (pending consent)`, 'warn');
-                else log(`❌ ${dest} request blocked`, 'error');
-            }).catch(e => {
-                log(`Failed to reach proxy: ${e.message}`, 'error');
-            });
+        async function runOnslaught() {
+            log('🚀 STARTING ONSLAUGHT: 20 events in 1s...', 'warn');
+            const dests = ['ga4', 'mixpanel', 'tiktok', 'facebook_pixel', 'hotjar', 'amplitude'];
+            for (let i = 0; i < 20; i++) {
+                const d = dests[Math.floor(Math.random() * dests.length)];
+                trackEvent(d, true);
+                if (i % 5 === 0) log(`Burst: ${i+1}/20 sent...`, 'info');
+                await new Promise(r => setTimeout(r, 50));
+            }
+            log('✅ ONSLAUGHT COMPLETE', 'success');
         }
+
+        async function runNewUserTest() {
+            log('🆕 SIMULATING NEW USER...', 'warn');
+            CONFIG.userId = 'new-user-' + Math.random().toString(36).substring(7);
+            updateUserIdDisplay();
+            log(`New ID generated: ${CONFIG.userId}`, 'info');
+            log('Firing events to buffer...', 'info');
+            await trackEvent('ga4', true);
+            await trackEvent('tiktok', true);
+            log('Events buffered. Now granting consent to trigger replay...', 'info');
+            setTimeout(() => updateConsent('all'), 1500);
+        }
+
+        async function resetSystem() {
+            if (!confirm('Are you sure you want to flush Redis, clear metrics, and wipe audit logs?')) return;
+            
+            log('🔥 TRIGGERING SYSTEM RESET...', 'error');
+            try {
+                const res = await fetch(`${CONFIG.proxyUrl}/api/debug/reset`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${CONFIG.adminSecret}` }
+                });
+                if (res.ok) {
+                    log('✨ SYSTEM RESET SUCCESSFUL', 'success');
+                    document.getElementById('console').innerHTML = '';
+                    fetchStats();
+                } else {
+                    log('Reset Failed (Unauthorized?)', 'error');
+                }
+            } catch (e) {
+                log(`Reset Error: ${e.message}`, 'error');
+            }
+        }
+
+        function log(msg, type = 'info') {
+            const con = document.getElementById('console');
+            const colors = { 
+                info: 'text-blue-400 border-blue-900/50', 
+                success: 'text-emerald-400 border-emerald-900/50', 
+                error: 'text-rose-400 border-rose-900/50', 
+                warn: 'text-amber-400 border-amber-900/50' 
+            };
+            const div = document.createElement('div');
+            div.className = `mono mb-2 p-2 glass border-l-4 ${colors[type]} animate-in slide-in-from-left duration-300`;
+            div.innerHTML = `<span class="opacity-40">[${new Date().toLocaleTimeString()}]</span> ${msg}`;
+            con.prepend(div);
+            if (con.childNodes.length > 50) con.removeChild(con.lastChild);
+        }
+
+        async function fetchStats() {
+            try {
+                const res = await fetch(`${CONFIG.proxyUrl}/metrics`);
+                const data = await res.json();
+                document.getElementById('stat-forwarded').innerText = data.decisions.forwarded;
+                document.getElementById('stat-blocked').innerText = data.decisions.blocked;
+                document.getElementById('stat-errors').innerText = data.errors;
+            } catch (e) {}
+        }
+
+        async function fetchAudit() {
+            try {
+                const res = await fetch(`${CONFIG.proxyUrl}/audit`, {
+                    headers: { 'Authorization': `Bearer ${CONFIG.adminSecret}` }
+                });
+                const logs = await res.json();
+                const container = document.getElementById('audit-mini');
+                container.innerHTML = logs.slice(0, 5).map(l => `
+                    <div class="flex justify-between items-center text-[10px] mb-1 opacity-70 border-b border-white/5 pb-1">
+                        <span>${l.destination}</span>
+                        <span class="${l.decision === 'blocked' ? 'text-rose-400' : 'text-emerald-400'} uppercase font-bold">${l.decision}</span>
+                    </div>
+                `).join('') || '<div class="text-[10px] opacity-30 italic">No activity yet</div>';
+            } catch (e) {}
+        }
+
+        async function checkConnection() {
+            try {
+                const res = await fetch(`${CONFIG.proxyUrl}/health`);
+                const data = await res.json();
+                document.getElementById('proxy-status').innerHTML = '<span class="status-dot bg-emerald-500"></span> Proxy: Online';
+                document.getElementById('storage-status').innerHTML = `<span class="status-dot bg-blue-500"></span> Storage: ${data.storage}`;
+            } catch (e) {
+                document.getElementById('proxy-status').innerHTML = '<span class="status-dot bg-rose-500"></span> Proxy: Offline';
+                document.getElementById('storage-status').innerHTML = '<span class="status-dot bg-gray-500"></span> Storage: Unknown';
+            }
+        }
+
+        function startPolling() {
+            setInterval(() => {
+                if (autoPolling) {
+                    fetchStats();
+                    fetchAudit();
+                    checkConnection();
+                }
+            }, 2000);
+            checkConnection();
+        }
+
+        window.onload = init;
     </script>
+</head>
+<body class="p-6 md:p-12">
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-end mb-12 gap-8">
+            <div class="relative">
+                <div class="absolute -top-12 -left-12 w-32 h-32 bg-blue-600/20 blur-[60px] rounded-full"></div>
+                <h1 class="text-5xl font-black tracking-tight leading-none">
+                    CONSENT<span class="text-blue-500">GUARD</span>
+                </h1>
+                <p class="text-gray-500 font-bold mt-3 uppercase text-[10px] tracking-[0.3em] flex items-center gap-2">
+                    <span class="status-dot bg-emerald-500 animate-pulse"></span>
+                    Laboratory / Kitchen Sink Sandbox v1.0
+                </p>
+            </div>
+
+            <div class="flex flex-wrap gap-4">
+                <div class="glass px-6 py-3 flex items-center gap-4">
+                    <div>
+                        <div class="text-[10px] uppercase text-gray-500 font-bold">User Identity</div>
+                        <div id="display-uid" class="mono text-blue-400">loading...</div>
+                    </div>
+                    <button onclick="runNewUserTest()" title="Generate New User" class="hover:text-blue-400 transition-colors">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                <button onclick="resetSystem()" class="glass px-6 py-3 flex items-center gap-2 text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/50 border-rose-500/20 transition-all font-bold text-sm uppercase tracking-tighter">
+                    <i data-lucide="bomb" class="w-4 h-4"></i>
+                    System Reset
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            <!-- Left: Control Column (4 cols) -->
+            <div class="lg:col-span-4 space-y-6">
+                <!-- Consent Card -->
+                <div class="glass p-8 relative overflow-hidden">
+                    <div class="scanline"></div>
+                    <div class="flex items-center gap-3 mb-8">
+                        <div class="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center justify-center">
+                            <i data-lucide="shield-check" class="w-4 h-4 text-blue-500"></i>
+                        </div>
+                        <h2 class="text-lg font-bold">Consent Matrix</h2>
+                    </div>
+
+                    <div class="space-y-4">
+                        <div class="flex justify-between items-center p-4 bg-white/5 rounded-2xl border border-white/5 group hover:bg-white/10 transition-all">
+                            <div class="flex items-center gap-3">
+                                <i data-lucide="bar-chart-3" class="w-4 h-4 text-gray-400"></i>
+                                <span class="font-medium">Analytics</span>
+                            </div>
+                            <input type="checkbox" id="c-analytics" class="w-5 h-5 rounded border-gray-700 bg-gray-800 text-blue-600 focus:ring-blue-500">
+                        </div>
+                        <div class="flex justify-between items-center p-4 bg-white/5 rounded-2xl border border-white/5 group hover:bg-white/10 transition-all">
+                            <div class="flex items-center gap-3">
+                                <i data-lucide="target" class="w-4 h-4 text-gray-400"></i>
+                                <span class="font-medium">Marketing</span>
+                            </div>
+                            <input type="checkbox" id="c-marketing" class="w-5 h-5 rounded border-gray-700 bg-gray-800 text-blue-600 focus:ring-blue-500">
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-3 mt-8">
+                            <button onclick="updateConsent('all')" class="btn-outline py-3 rounded-xl text-xs uppercase font-bold">Allow All</button>
+                            <button onclick="updateConsent('none')" class="btn-outline py-3 rounded-xl text-xs uppercase font-bold">Deny All</button>
+                        </div>
+                        <button onclick="updateConsent()" class="btn-primary w-full py-4 rounded-2xl mt-2">
+                            Save Preferences
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Stats Dashboard -->
+                <div class="glass p-6">
+                    <h2 class="text-sm font-bold text-gray-500 uppercase tracking-widest mb-6">Real-time Metrics</h2>
+                    <div class="grid grid-cols-3 gap-4">
+                        <div class="text-center">
+                            <div id="stat-forwarded" class="text-2xl font-black text-emerald-400">0</div>
+                            <div class="text-[10px] uppercase font-bold text-gray-600">Forwarded</div>
+                        </div>
+                        <div class="text-center border-x border-white/10">
+                            <div id="stat-blocked" class="text-2xl font-black text-rose-400">0</div>
+                            <div class="text-[10px] uppercase font-bold text-gray-600">Blocked</div>
+                        </div>
+                        <div class="text-center">
+                            <div id="stat-errors" class="text-2xl font-black text-amber-400">0</div>
+                            <div class="text-[10px] uppercase font-bold text-gray-600">Errors</div>
+                        </div>
+                    </div>
+                    
+                    <!-- Mini Audit -->
+                    <div class="mt-8 pt-6 border-t border-white/10">
+                        <div class="flex justify-between items-center mb-4">
+                            <div class="text-[10px] uppercase font-bold text-gray-500">Latest Decisions</div>
+                            <a href="/dashboard" target="_blank" class="text-[10px] text-blue-500 hover:underline">View Full Audit</a>
+                        </div>
+                        <div id="audit-mini" class="mono"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Middle: Traffic Column (4 cols) -->
+            <div class="lg:col-span-4 space-y-6">
+                <div class="glass p-8 h-full flex flex-col">
+                    <div class="flex items-center gap-3 mb-8">
+                        <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
+                            <i data-lucide="zap" class="w-4 h-4 text-emerald-500"></i>
+                        </div>
+                        <h2 class="text-lg font-bold">Traffic Engine</h2>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-3 destination-grid flex-grow overflow-y-auto pr-2 custom-scrollbar">
+                        <button onclick="trackEvent('ga4')" class="glass p-4 text-left group hover:bg-white/5 border-white/5 transition-all">
+                            <div class="text-[10px] text-gray-500 font-bold uppercase mb-1">Analytics</div>
+                            <div class="font-bold text-sm">Google Analytics 4</div>
+                        </button>
+                        <button onclick="trackEvent('mixpanel')" class="glass p-4 text-left group hover:bg-white/5 border-white/5 transition-all">
+                            <div class="text-[10px] text-gray-500 font-bold uppercase mb-1">Analytics</div>
+                            <div class="font-bold text-sm">Mixpanel</div>
+                        </button>
+                        <button onclick="trackEvent('amplitude')" class="glass p-4 text-left group hover:bg-white/5 border-white/5 transition-all">
+                            <div class="text-[10px] text-gray-500 font-bold uppercase mb-1">Product Analytics</div>
+                            <div class="font-bold text-sm">Amplitude</div>
+                        </button>
+                        <button onclick="trackEvent('tiktok')" class="glass p-4 text-left group hover:bg-white/5 border-white/5 transition-all">
+                            <div class="text-[10px] text-gray-500 font-bold uppercase mb-1">Marketing</div>
+                            <div class="font-bold text-sm">TikTok Pixel</div>
+                        </button>
+                        <button onclick="trackEvent('facebook_pixel')" class="glass p-4 text-left group hover:bg-white/5 border-white/5 transition-all">
+                            <div class="text-[10px] text-gray-500 font-bold uppercase mb-1">Marketing</div>
+                            <div class="font-bold text-sm">Meta Pixel (FB)</div>
+                        </button>
+                        <button onclick="trackEvent('hotjar')" class="glass p-4 text-left group hover:bg-white/5 border-white/5 transition-all">
+                            <div class="text-[10px] text-gray-500 font-bold uppercase mb-1">Experience</div>
+                            <div class="font-bold text-sm">Hotjar Behavior</div>
+                        </button>
+                        <button onclick="trackEvent('unknown')" class="glass p-4 text-left group hover:bg-white/5 border-white/5 transition-all">
+                            <div class="text-[10px] text-rose-500 font-bold uppercase mb-1">Discovery</div>
+                            <div class="font-bold text-sm italic">Unknown SDK Request</div>
+                        </button>
+                    </div>
+
+                    <div class="mt-8 space-y-3">
+                        <div class="text-[10px] uppercase font-bold text-gray-600 mb-2">Scenario Runners</div>
+                        <button onclick="runOnslaught()" class="w-full btn-outline border-amber-500/20 text-amber-500 hover:bg-amber-500/10 py-3 rounded-xl flex items-center justify-center gap-2">
+                            <i data-lucide="flame" class="w-4 h-4"></i>
+                            The Kitchen Sink (Onslaught)
+                        </button>
+                        <button onclick="runNewUserTest()" class="w-full btn-outline border-blue-500/20 text-blue-500 hover:bg-blue-500/10 py-3 rounded-xl flex items-center justify-center gap-2">
+                            <i data-lucide="user-plus" class="w-4 h-4"></i>
+                            Pending Buffer Test
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Network Stream (4 cols) -->
+            <div class="lg:col-span-4 flex flex-col h-[700px]">
+                <div class="glass p-8 flex flex-col h-full border-blue-500/20">
+                    <div class="flex justify-between items-center mb-8">
+                        <div class="flex items-center gap-3">
+                            <div class="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center justify-center">
+                                <i data-lucide="activity" class="w-4 h-4 text-blue-500"></i>
+                            </div>
+                            <h2 class="text-lg font-bold">Network Stream</h2>
+                        </div>
+                        <button onclick="document.getElementById('console').innerHTML = ''" class="text-gray-600 hover:text-white">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+
+                    <div id="console" class="flex-grow overflow-y-auto pr-2 custom-scrollbar space-y-2">
+                        <div class="text-gray-600 italic text-sm text-center py-12">
+                            <div class="mb-4"><i data-lucide="monitor" class="w-8 h-8 mx-auto opacity-20"></i></div>
+                            System initialized.<br>Ready to intercept traffic.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Footer -->
+        <footer class="mt-12 text-center text-gray-700 text-xs font-medium uppercase tracking-widest flex items-center justify-center gap-6">
+            <span id="proxy-status"><span class="status-dot bg-gray-500"></span> Proxy: Checking...</span>
+            <span class="w-1 h-1 bg-gray-800 rounded-full"></span>
+            <span id="storage-status"><span class="status-dot bg-gray-500"></span> Storage: Checking...</span>
+            <span class="w-1 h-1 bg-gray-800 rounded-full"></span>
+            <span>Client Interceptor: OK</span>
+        </footer>
+    </div>
 </body>
 </html>

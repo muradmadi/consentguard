@@ -60,8 +60,8 @@ program
     });
 
     if (generateProduction.value) {
-      const dockerfile = `FROM node:20-slim\nWORKDIR /app\nRUN npm install -g @consentguard/cli\nEXPOSE ${response.port}\nCMD ["consentguard", "start", "--port", "${response.port}"]`;
-      const dockerCompose = `services:\n  proxy:\n    build: .\n    ports:\n      - "${response.port}:${response.port}"\n    environment:\n      - REDIS_URL=redis://redis:6379\n      - PROXY_SECRET=${response.proxySecret}\n      - ADMIN_SECRET=${response.adminSecret}\n    depends_on:\n      - redis\n  redis:\n    image: redis:7-alpine\n    volumes:\n      - redis_data:/data\nvolumes:\n  redis_data:`;
+      const dockerfile = `FROM node:20-slim\nWORKDIR /app\nCOPY . .\nRUN npm install --production\nEXPOSE ${response.port}\nCMD ["node", "packages/server/dist/index.js"]`;
+      const dockerCompose = `services:\n  proxy:\n    build: .\n    ports:\n      - "${response.port}:${response.port}"\n    environment:\n      - REDIS_URL=redis://redis:6379\n      - PROXY_SECRET=${response.proxySecret}\n      - ADMIN_SECRET=${response.adminSecret}\n      - CG_ENABLE_CACHE=true\n    depends_on:\n      - redis\n  redis:\n    image: redis:7-alpine\n    volumes:\n      - redis_data:/data\nvolumes:\n  redis_data:`;
       const envProd = `PORT=${response.port}\nREDIS_URL=redis://localhost:6379\nPROXY_SECRET=${response.proxySecret}\nADMIN_SECRET=${response.adminSecret}\nCG_ENABLE_CACHE=true\nCG_CACHE_TTL=60000`;
 
       fs.writeFileSync(path.join(process.cwd(), 'Dockerfile'), dockerfile);

@@ -16,6 +16,8 @@ const REGISTRY: Record<string, DestinationRule> = {
   hotjar,
 };
 
+export const REGISTRY_KEYS = Object.keys(REGISTRY);
+
 export function getDestinationRule(id: string): DestinationRule | null {
   return REGISTRY[id] || null;
 }

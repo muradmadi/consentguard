@@ -79,4 +79,9 @@ export class HybridStorageProvider implements StorageProvider {
       cached.expires = Date.now() + (seconds * 1000);
     }
   }
+
+  async flushAll(): Promise<void> {
+    await this.primary.flushAll();
+    this.cache.clear();
+  }
 }

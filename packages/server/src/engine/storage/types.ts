@@ -8,4 +8,5 @@ export interface StorageProvider {
   llen(key: string): Promise<number>;
   rpush(key: string, value: string): Promise<void>;
   expire(key: string, seconds: number): Promise<void>;
+  flushAll(): Promise<void>;
 }

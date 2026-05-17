@@ -57,6 +57,12 @@ export class MemoryStorageProvider implements StorageProvider {
     this.ttls.set(key, Date.now() + seconds * 1000);
   }
 
+  async flushAll(): Promise<void> {
+    this.data.clear();
+    this.lists.clear();
+    this.ttls.clear();
+  }
+
   private checkTtl(key: string) {
     const expiry = this.ttls.get(key);
     if (expiry && expiry < Date.now()) {

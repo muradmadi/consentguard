@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Shield, ArrowUpRight, ChevronRight } from 'lucide-react'
+import { Shield, ChevronRight } from 'lucide-react'
 import { fetchStats, fetchRules, fetchAuditLogs, updateRule } from './lib/api'
 import { RuleEditor } from './components/RuleEditor'
 import { LiveTraffic } from './components/LiveTraffic'
@@ -81,25 +81,23 @@ function App() {
                 <div className="card">
                   <h3>Forwarded</h3>
                   <div className="stat-value" style={{ color: '#0070f3' }}>
-                    {stats?.forwarded || 0}
+                    {stats?.decisions?.forwarded || 0}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '8px', fontSize: '12px' }}>
-                    <ArrowUpRight size={14} /> <span>12% from last hour</span>
-                  </div>
+                  <p style={{ marginTop: '8px', fontSize: '12px', color: 'var(--accents-4)' }}>Active requests being processed</p>
                 </div>
                 <div className="card">
                   <h3>Blocked</h3>
                   <div className="stat-value" style={{ color: '#ee0000' }}>
-                    {stats?.blocked || 0}
+                    {stats?.decisions?.blocked || 0}
                   </div>
-                  <p style={{ marginTop: '8px', fontSize: '12px' }}>Prevented non-compliant data leaks</p>
+                  <p style={{ marginTop: '8px', fontSize: '12px', color: 'var(--accents-4)' }}>Prevented data leaks</p>
                 </div>
                 <div className="card" style={{ gridColumn: 'span 2' }}>
                   <h3>System Errors</h3>
                   <div className="stat-value">
                     {stats?.errors || 0}
                   </div>
-                  <p style={{ marginTop: '8px', fontSize: '12px' }}>Upstream connection issues or proxy failures</p>
+                  <p style={{ marginTop: '8px', fontSize: '12px', color: 'var(--accents-4)' }}>Connection or proxy failures</p>
                 </div>
               </div>
               
@@ -209,7 +207,10 @@ function App() {
                 </div>
                 <div className="card">
                   <h3>Coverage</h3>
-                  <div className="stat-value" style={{ color: '#00ff00' }}>94%</div>
+                  <div className="stat-value" style={{ color: '#00ff00' }}>
+                    {rules.length > 0 ? Math.round((rules.length / 50) * 100) : 0}%
+                  </div>
+                  <p style={{ marginTop: '8px', fontSize: '12px', color: 'var(--accents-4)' }}>Of global destination registry</p>
                 </div>
               </div>
 
@@ -254,6 +255,44 @@ function App() {
                   </tbody>
                 </table>
               </div>
+          </div>
+        )}
+        {activeTab === 'audit' && (
+          <div className="card" style={{ padding: '24px' }}>
+            <h2 style={{ marginBottom: '24px' }}>Full Audit History</h2>
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>USER ID</th>
+                    <th>DESTINATION</th>
+                    <th>DECISION</th>
+                    <th>REASON</th>
+                    <th>TIMESTAMP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.length > 0 ? logs.map((log: any, i: number) => (
+                    <tr key={i} onClick={() => setSelectedLog(log)} style={{ cursor: 'pointer' }}>
+                      <td><code style={{ fontSize: '11px' }}>{log.userId}</code></td>
+                      <td><strong>{log.destination}</strong></td>
+                      <td>
+                        <span 
+                          className={`badge ${log.decision === 'blocked' ? 'badge-error' : log.decision === 'buffered' ? '' : 'badge-success'}`} 
+                          style={log.decision === 'buffered' ? { background: '#0070f3', color: 'white', fontWeight: 600 } : {}}
+                        >
+                          {log.decision.toUpperCase()}
+                        </span>
+                      </td>
+                      <td><span style={{ fontSize: '12px', color: 'var(--accents-4)' }}>{log.reason}</span></td>
+                      <td>{new Date(log.timestamp).toLocaleTimeString()}</td>
+                    </tr>
+                  )) : (
+                    <tr><td colSpan={5} style={{ textAlign: 'center', padding: '40px', color: 'var(--accents-4)' }}>No audit logs found.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </main>

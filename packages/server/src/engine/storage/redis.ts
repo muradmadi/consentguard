@@ -47,4 +47,8 @@ export class RedisStorageProvider implements StorageProvider {
   async expire(key: string, seconds: number): Promise<void> {
     await this.redis.expire(key, seconds);
   }
+
+  async flushAll(): Promise<void> {
+    await this.redis.flushdb();
+  }
 }
