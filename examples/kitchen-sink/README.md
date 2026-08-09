@@ -1,35 +1,34 @@
-# ConsentGuard Kitchen Sink Demo
+# Kitchen Sink Demo
 
-This example demonstrates the end-to-end flow of ConsentGuard: from client-side interception to server-side scrubbing and consent enforcement.
+A minimal same-origin playground for ConsentGuard.
 
-## 🚀 Getting Started
+## Run it
 
-### 1. Start the Infrastructure
-Ensure you have the ConsentGuard proxy and Redis running. You can use the `docker-compose.yml` in this directory:
+From the repo root:
 
 ```bash
-docker-compose up -d
-```
-
-*Alternatively, if running locally without Docker:*
-```bash
-# In the root of the project
+npm install
 npm run build
-# Start the proxy (ensure Redis is running at localhost:6379)
-npx consentguard start
+
+# in-memory storage, no Redis needed
+CG_STORAGE=memory \
+  ADMIN_SECRET=dev-admin-secret \
+  CG_ALLOWED_ORIGINS=http://localhost:3000 \
+  GA4_MEASUREMENT_ID=G-XXXXXXX \
+  GA4_API_SECRET=your-mp-secret \
+  node packages/server/dist/index.js
 ```
 
-### 2. Open the Demo
-Open `index.html` in your browser.
+Then open http://localhost:3000/dashboard (admin UI) and, in a separate tab, open [`index.html`](./index.html) via `http://localhost:3000/consentguard-client.js`-adjacent hosting.
 
-### 3. Test the Flow
-1.  **Observe Blocking**: Try triggering a "Google Analytics" event without granting consent. The proxy will block it (204 or drop).
-2.  **Grant Consent**: Toggle the "Analytics" switch and click "Update Preferences".
-3.  **Observe Scrubbing**: Trigger the "Google Analytics" event again. Check the Proxy Audit Logs (or the Admin Dashboard) to see that PII (like Email and IP) has been scrubbed/hashed according to the registry rules.
-4.  **Buffer & Replay**: Toggle consent *off*, trigger an event for a *new* user (you can change the User ID in the HTML), then toggle consent *on*. Watch the proxy replay the buffered request.
+The simplest way to serve `index.html` same-origin with the proxy is to open it from a static file server on the same port, or paste its contents behind a route in your own app. If you just double-click it (`file://…`), the client bundle won't load and the proxy will reject cross-origin ingest requests — which is the whole point.
 
-## 🛡️ Key Features Demonstrated
-- **Universal Interception**: Intercepting `fetch` calls to various analytics endpoints.
-- **Dynamic Policy Enforcement**: Consent state retrieved from Redis in real-time.
-- **Rule-Based Scrubbing**: Applying SHA-256 hashing to PII fields.
-- **Audit Trails**: Every decision is logged and visible in the Admin Dashboard.
+## What to try
+
+1. Click **Fire Google Analytics 4** without consent → the client rewrites the URL to `/ingest/ga4`, the proxy sees no consent, and drops the request (204). Check the dashboard: one blocked event.
+2. Click **Accept all** → `POST /consent/self` with your cookie's user id. If the proxy had buffered requests for you, they replay in the background.
+3. Fire GA4 again → the proxy translates the gtag beacon into Measurement Protocol JSON and forwards it to `https://www.google-analytics.com/mp/collect`. If your `GA4_MEASUREMENT_ID` is real, the event will show up in your GA4 Realtime report within ~30s.
+
+## What doesn't work yet
+
+Mixpanel, Meta Pixel, TikTok, and other "stub" destinations have consent rules but no vendor adapter. Firing them will pass consent, drop at the forward step, and audit as `blocked` with reason `no_adapter_and_no_upstream_url`. That's on purpose — writing a real adapter for each vendor is not free, and pretending otherwise would defeat the point of this exercise.

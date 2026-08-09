@@ -1,6 +1,6 @@
 {
   "port": 3000,
   "redisUrl": "redis://localhost:6379",
-  "proxySecret": "change-me-proxy",
-  "adminSecret": "change-me-admin"
+  "adminSecret": "dev-admin-secret",
+  "allowedOrigins": ["http://localhost:3000"]
 }

@@ -4,10 +4,14 @@ services:
     ports:
       - "3000:3000"
     environment:
+      - PORT=3000
       - REDIS_URL=redis://redis:6379
-      - PROXY_SECRET=dev-proxy-secret
-      - ADMIN_SECRET=dev-admin-secret
+      - ADMIN_SECRET=change-me
+      - CG_ALLOWED_ORIGINS=http://localhost:3000
       - CG_ENABLE_CACHE=true
+      # Set to real values to enable the GA4 vendor adapter.
+      - GA4_MEASUREMENT_ID=
+      - GA4_API_SECRET=
     depends_on:
       - redis
   redis:

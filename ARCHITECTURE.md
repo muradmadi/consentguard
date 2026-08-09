@@ -1,74 +1,102 @@
 # ConsentGuard Architecture
 
-ConsentGuard is a **dual-mode privacy enforcement layer**. It consists of a client-side interceptor that reroutes traffic and a server-side proxy that enforces privacy policies.
+ConsentGuard is a two-part system: a browser interceptor that reroutes analytics traffic, and a proxy that enforces consent before forwarding it to the real vendor.
 
-## System Overview
+## Overview
 
 ```mermaid
-graph TD
-    subgraph "Browser (Client Side)"
-        App[Web Application]
-        SDK[Analytics SDKs / Pixels]
-        CG_Client[ConsentGuard Client Interceptor]
+graph LR
+    subgraph Browser
+        App[Web app]
+        SDK[Analytics SDK]
+        Client[ConsentGuard client]
     end
 
-    subgraph "Proxy Layer (Server Side)"
-        Hono[Hono Proxy Server]
-        Engine[Rule & Transformation Engine]
-        Cache[Hybrid LRU Cache]
+    subgraph Proxy["ConsentGuard proxy"]
+        Router[Hono router]
+        Adapter[Vendor adapter]
+        Engine[Rule + transform engine]
+        Cache[Hybrid LRU cache]
     end
 
-    subgraph "Storage"
-        Redis[(Redis Consent Store)]
-    end
-
-    subgraph "Destinations"
-        GA4[Google Analytics]
-        FB[Facebook Pixel]
-        TT[TikTok Pixel]
-    end
+    Store[(Storage: memory / Redis / KV)]
+    Vendor[Vendor API<br/>e.g. GA4 Measurement Protocol]
 
     App --> SDK
-    SDK -- "fetch / XHR" --> CG_Client
-    CG_Client -- "Reroute to /ingest" --> Hono
-    Hono --> Cache
-    Cache -- "Miss" --> Redis
-    Hono --> Engine
-    Engine -- "Scrub / Block" --> GA4
-    Engine -- "Scrub / Block" --> FB
-    Engine -- "Scrub / Block" --> TT
+    SDK -->|fetch / XHR / beacon| Client
+    Client -->|same-origin POST /ingest/:dest| Router
+    Router --> Cache
+    Cache --> Store
+    Router --> Adapter
+    Adapter --> Engine
+    Engine -->|scrubbed payload| Vendor
 ```
 
-## Key Components
+## Request lifecycle
 
-### 1. Client Interceptor (`@consentguard/client`)
-- **Primitive Patching**: Overrides `window.fetch`, `XMLHttpRequest`, and `navigator.sendBeacon`.
-- **Registry Matching**: Uses a list of known tracking patterns to identify which requests to reroute.
-- **Resilience**: Operates with zero external dependencies to ensure it never crashes the host application.
+1. Browser SDK fires a request (e.g. `POST https://www.google-analytics.com/g/collect?...`).
+2. The client interceptor recognizes the destination and rewrites the URL to `<proxy>/ingest/ga4`, preserving the original URL in the `X-Original-Url` header.
+3. The proxy checks the request's `Origin` against `CG_ALLOWED_ORIGINS` and rejects unknown origins.
+4. It resolves the user via `X-Consent-UserId` header, `cuid` cookie, or `?cuid=` query param (in that order).
+5. It looks up consent for that user from storage (hybrid cache in front, fail-closed to `deny` on error).
+6. It resolves the destination rule (registry defaults, optionally overridden per-tenant in storage).
+7. Consent check:
+   - **Granted** → run the vendor adapter, apply transformations, forward. Log `forwarded` or `scrubbed`.
+   - **Denied** → drop, return `204`. Log `blocked`.
+   - **Pending** (no consent record yet) → optionally buffer the request for later replay, return `202`. Log `buffered`.
+8. When consent is later saved via `PUT /consent/:userId` or `POST /consent/self`, any buffered requests for that user are replayed in the background.
 
-### 2. Hybrid Storage Layer
-- **Resilience**: Combines a local in-memory LRU cache with Redis.
-- **Performance**: High-traffic consent lookups (<1ms) are handled by the local cache, significantly reducing Redis load.
-- **Fail-Closed**: If both layers fail, the system defaults to "deny" for non-essential categories.
+## Vendor adapters
 
-### 3. Rule & Transformation Engine
-- **Declarative Logic**: Rules are defined as JSON objects specifying paths to `strip`, `hash`, or `redact`.
-- **Consent Categories**: Maps every destination to a purpose (e.g., `analytics`, `marketing`).
-- **Audit Logs**: Every decision (Forward, Scrub, Block) is logged to Redis for compliance auditing.
+Each destination has a rule (`id`, `category`, `transformations`) and, if it needs to talk to a real vendor API, an **adapter**. The adapter is responsible for:
 
-### 4. Admin Control Plane
-- **Governance**: Allows overriding global rules with tenant-specific policies.
-- **Observability**: Provides real-time traffic monitoring and health diagnostics.
-- **Replay Buffer**: Temporarily stores events for new users until their consent state is finalized.
+- Parsing the intercepted request format (query string for GA4 beacons, JSON body for most others).
+- Translating it into the vendor's actual server-to-server API format.
+- Providing the upstream URL, method, headers, and body for the `fetch` call.
 
-## Sequence Flow
+Today only the **GA4 adapter** is implemented. It maps intercepted `/g/collect` params to Measurement Protocol JSON and posts to `mp/collect` with a server-side `measurement_id` + `api_secret`. Other destinations fall back to a passthrough that forwards the JSON payload as-is — this is a no-op stub, not a working integration.
 
-1.  **SDK Init**: A tracking SDK (e.g., GA4) initializes and attempts to send a `POST` request to `google-analytics.com`.
-2.  **Interception**: The ConsentGuard client catches the request, changes the URL to `proxy.com/ingest/ga4`, and adds authentication headers.
-3.  **Authentication**: The proxy validates the `PROXY_SECRET`.
-4.  **Consent Lookup**: The proxy checks the `userId` against the Hybrid Cache/Redis.
-5.  **Enforcement**: 
-    - If **Denied**: Proxy returns `204 No Content` and drops the event.
-    - If **Granted**: Proxy applies transformations (e.g., hashing the `user_id`) and forwards the payload to the real GA4 endpoint.
-    - If **Pending**: Proxy buffers the request and returns `202 Accepted`.
-6.  **Response**: The original SDK receives a successful response, unaware that its data was scrubbed or redirected.
+## Consent state
+
+Stored per user under `consent:<userId>` with a 1-year TTL. Shape:
+
+```json
+{
+  "userId": "u_abc123",
+  "purposes": { "necessary": true, "analytics": true, "marketing": false },
+  "timestamp": 1700000000000,
+  "metadata": { "source": "self" }
+}
+```
+
+Consent categories are strings; the current rules use `necessary`, `analytics`, `marketing`, `personalization`. A rule's `category` must be present and `true` in the user's purposes for the request to forward.
+
+## Storage layer
+
+`StorageProvider` interface with three implementations:
+
+- **Memory** — for tests and local sandbox. Data resets on restart.
+- **Redis** — via `ioredis`, with a 100ms read timeout.
+- **Cloudflare KV** — for edge deployment (Workers runtime).
+
+The **hybrid** provider wraps any of the above with a bounded in-memory LRU cache (default 60s TTL, 1000 entries) and a stale-while-revalidate fallback if the primary store errors.
+
+## Runtimes
+
+The Hono app is runtime-agnostic. Entry points:
+
+- `packages/server/src/index.ts` — Node.js via `@hono/node-server`.
+- `packages/server/src/runtime/bun.ts` — Bun.
+- `packages/server/src/runtime/workers.ts` — Cloudflare Workers (uses KV storage automatically if `env.CONSENT_STORE` is bound).
+- `packages/server/src/middleware/index.ts` — mounts the app as a sub-route in an existing Hono server.
+
+## Audit log
+
+Every ingest decision writes a record to a bounded Redis list (default 1000 entries). The dashboard reads from `GET /audit` and the CLI streams via `consentguard logs`.
+
+## What this doesn't do
+
+- No cross-tenant isolation. One proxy = one tenant.
+- No IAB TCF v2 signal reading. If you use a TCF-compliant CMP, wire it into your own banner code that calls `POST /consent/self`.
+- No queue-backed retry for failed upstream forwards. If the vendor is down, the event is lost.
+- No PII detection beyond what the rules declare. If your app sends an email in an undeclared field, it will forward.

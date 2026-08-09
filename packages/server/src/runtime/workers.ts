@@ -1,12 +1,16 @@
 import { createApp } from '../app'
-import { MemoryStorageProvider } from '../engine/storage'
+import { MemoryStorageProvider, CloudflareKVStorageProvider } from '../engine/storage'
 
 export default {
   async fetch(request: Request, env: any, ctx: any) {
-    // In Workers, we use MemoryStorage for the proxy state if Redis isn't provided
-    // Ideally, users would provide a Redis URL for persistence across worker instances
-    const storage = new MemoryStorageProvider()
+    // In Workers, if env.CONSENT_STORE KV namespace is bound, use it for edge-native persistence.
+    // Otherwise fallback to MemoryStorageProvider for local sandbox/testing.
+    const storage = env.CONSENT_STORE 
+      ? new CloudflareKVStorageProvider(env.CONSENT_STORE)
+      : new MemoryStorageProvider()
+      
     const app = createApp(storage, env)
     return app.fetch(request, env, ctx)
   },
 }
+

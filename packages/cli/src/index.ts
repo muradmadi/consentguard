@@ -29,48 +29,69 @@ program
       {
         type: 'text',
         name: 'redisUrl',
-        message: 'Redis Connection URL',
+        message: 'Redis connection URL (leave default to use in-memory)',
         initial: 'redis://localhost:6379'
       },
       {
         type: 'password',
-        name: 'proxySecret',
-        message: 'Proxy Secret (used for client authentication)',
-        initial: 'change-me-proxy'
+        name: 'adminSecret',
+        message: 'Admin secret (bearer token for /audit, /api/rules, etc.)',
+        initial: 'dev-admin-secret'
       },
       {
-        type: 'password',
-        name: 'adminSecret',
-        message: 'Admin Secret (used for dashboard/API)',
-        initial: 'change-me-admin'
+        type: 'text',
+        name: 'allowedOrigins',
+        message: 'Comma-separated allowed origins (empty = allow all, dev only)',
+        initial: 'http://localhost:3000'
       }
     ]);
 
+    const config = {
+      port: response.port,
+      redisUrl: response.redisUrl,
+      adminSecret: response.adminSecret,
+      allowedOrigins: (response.allowedOrigins || '').split(',').map((s: string) => s.trim()).filter(Boolean),
+    };
+
     const configPath = path.join(process.cwd(), '.consentguardrc.json');
-    fs.writeFileSync(configPath, JSON.stringify(response, null, 2));
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    console.log(pc.green(`\nCreated ${pc.bold('.consentguardrc.json')}`));
 
-    console.log(pc.green(`\n✅ Created ${pc.bold('.consentguardrc.json')}`));
-
-    // Generate Production Assets
     const generateProduction = await prompts({
       type: 'confirm',
       name: 'value',
-      message: 'Generate production Docker assets?',
+      message: 'Generate a docker-compose.yml with Redis?',
       initial: true
     });
 
     if (generateProduction.value) {
-      const dockerfile = `FROM node:20-slim\nWORKDIR /app\nCOPY . .\nRUN npm install --production\nEXPOSE ${response.port}\nCMD ["node", "packages/server/dist/index.js"]`;
-      const dockerCompose = `services:\n  proxy:\n    build: .\n    ports:\n      - "${response.port}:${response.port}"\n    environment:\n      - REDIS_URL=redis://redis:6379\n      - PROXY_SECRET=${response.proxySecret}\n      - ADMIN_SECRET=${response.adminSecret}\n      - CG_ENABLE_CACHE=true\n    depends_on:\n      - redis\n  redis:\n    image: redis:7-alpine\n    volumes:\n      - redis_data:/data\nvolumes:\n  redis_data:`;
-      const envProd = `PORT=${response.port}\nREDIS_URL=redis://localhost:6379\nPROXY_SECRET=${response.proxySecret}\nADMIN_SECRET=${response.adminSecret}\nCG_ENABLE_CACHE=true\nCG_CACHE_TTL=60000`;
-
-      fs.writeFileSync(path.join(process.cwd(), 'Dockerfile'), dockerfile);
-      fs.writeFileSync(path.join(process.cwd(), 'docker-compose.yml'), dockerCompose);
-      fs.writeFileSync(path.join(process.cwd(), '.env.production'), envProd);
-
-      console.log(pc.green(`✅ Created ${pc.bold('Dockerfile')}`));
-      console.log(pc.green(`✅ Created ${pc.bold('docker-compose.yml')}`));
-      console.log(pc.green(`✅ Created ${pc.bold('.env.production')}`));
+      const originsEnv = config.allowedOrigins.join(',');
+      const compose = [
+        'services:',
+        '  proxy:',
+        '    build: .',
+        `    ports:`,
+        `      - "${config.port}:${config.port}"`,
+        '    environment:',
+        `      - PORT=${config.port}`,
+        '      - REDIS_URL=redis://redis:6379',
+        `      - ADMIN_SECRET=${config.adminSecret}`,
+        `      - CG_ALLOWED_ORIGINS=${originsEnv}`,
+        '      - CG_ENABLE_CACHE=true',
+        '      - GA4_MEASUREMENT_ID=',
+        '      - GA4_API_SECRET=',
+        '    depends_on:',
+        '      - redis',
+        '  redis:',
+        '    image: redis:7-alpine',
+        '    volumes:',
+        '      - redis_data:/data',
+        'volumes:',
+        '  redis_data:',
+        '',
+      ].join('\n');
+      fs.writeFileSync(path.join(process.cwd(), 'docker-compose.yml'), compose);
+      console.log(pc.green(`Created ${pc.bold('docker-compose.yml')}`));
     }
 
     console.log(pc.dim('\nYou can now run: ') + pc.bold('consentguard start'));

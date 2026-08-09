@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/.turbo
+.git
+.github
+coverage
+*.log
+.env
+.env.*
+!.env.production

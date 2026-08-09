@@ -3,11 +3,14 @@ main = "packages/server/src/runtime/workers.ts"
 compatibility_date = "2024-05-15"
 
 [vars]
-# REDIS_URL = "..." # Optional: Connect to external Redis (e.g. Upstash)
-PROXY_SECRET = "dev-secret"
-ADMIN_SECRET = "admin-secret"
+# ADMIN_SECRET must be set via `wrangler secret put ADMIN_SECRET` in production.
+CG_ALLOWED_ORIGINS = ""
 BUFFER_PENDING = "true"
 
-# [kv_namespaces]
+# Uncomment and populate to enable GA4 forwarding at the edge.
+# GA4_MEASUREMENT_ID = ""
+# GA4_API_SECRET = ""
+
+# [[kv_namespaces]]
 # binding = "CONSENT_STORE"
 # id = "..."

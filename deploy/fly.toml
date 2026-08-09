@@ -18,4 +18,5 @@ primary_region = "ams"
   PORT = "3000"
   BUFFER_PENDING = "true"
 
-# fly secrets set REDIS_URL=... PROXY_SECRET=... ADMIN_SECRET=...
+# fly secrets set REDIS_URL=... ADMIN_SECRET=... CG_ALLOWED_ORIGINS=... \
+#                 GA4_MEASUREMENT_ID=... GA4_API_SECRET=...
