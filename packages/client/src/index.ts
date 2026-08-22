@@ -2,9 +2,9 @@
  * Sluice Client Interceptor
  *
  * Patches global networking primitives to reroute analytics requests
- * through the Sluice proxy. Exposes window.Sluice.setConsent()
- * so your consent banner can grant/revoke purposes without embedding
- * any server secret in the browser bundle.
+ * through the Sluice proxy. It holds no secret and grants no consent:
+ * consent reaches the firewall from an external CMP over /webhooks/:provider,
+ * never from the page that is being measured.
  */
 
 import { INTERCEPTION_PATTERNS } from './patterns'
@@ -111,36 +111,6 @@ function getOrSetUserId(config: ResolvedConfig): string {
   return id
 }
 
-/**
- * Publicly-callable consent API. Wire this up to your banner's Accept/Reject buttons.
- * Purposes shape: { analytics: true, marketing: false, ... }. `necessary` is always true.
- */
-async function setConsent(
-  purposes: Record<string, boolean>,
-  proxyBase: string,
-  userId: string,
-): Promise<{ ok: boolean; replayed?: number; error?: string }> {
-  try {
-    const res = await fetch(`${proxyBase}/consent/self`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': userId },
-      body: JSON.stringify({
-        purposes: { necessary: true, ...purposes },
-        timestamp: Date.now(),
-        metadata: { source: 'client' },
-      }),
-    })
-    if (!res.ok) {
-      return { ok: false, error: `HTTP ${res.status}` }
-    }
-    const data = (await res.json().catch(() => ({}))) as { replayed?: number }
-    return { ok: true, replayed: data.replayed }
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : 'network error' }
-  }
-}
-
 export function init(config?: Partial<ClientConfig>) {
   if (typeof window === 'undefined') return
 
@@ -162,12 +132,9 @@ export function init(config?: Partial<ClientConfig>) {
   const proxyBase = resolveProxyBase(resolved)
   const ingestBase = `${proxyBase}/ingest`
 
-  // Expose the public API. No secrets involved.
-  ;(window as any).Sluice = {
-    userId,
-    proxyBase,
-    setConsent: (purposes: Record<string, boolean>) => setConsent(purposes, proxyBase, userId),
-  }
+  // Expose the resolved identity for debugging. No secrets, and nothing
+  // writable: a page cannot assert its own consent.
+  ;(window as any).Sluice = { userId, proxyBase }
 
   if (resolved.observeMutations) {
     observeMutations((url) => matchDestination(url, activeDestinations))
@@ -233,7 +200,7 @@ export function init(config?: Partial<ClientConfig>) {
       // Rule: return an opaque 204 back to the calling SDK so it thinks the
       // request succeeded regardless of whether the proxy forwarded, scrubbed,
       // or dropped it. Keeps vendor SDKs from retrying.
-      if (res.ok || res.status === 202 || res.status === 204) {
+      if (res.ok || res.status === 204) {
         return new Response(null, { status: 204, statusText: 'No Content' })
       }
 
@@ -273,7 +240,7 @@ export function init(config?: Partial<ClientConfig>) {
         if (this.readyState !== 4) return
         if (this.status === 403) stopRerouting = true
         // Present an opaque success to the vendor SDK regardless of actual outcome.
-        if (this.status === 200 || this.status === 202 || this.status === 204) {
+        if (this.status === 200 || this.status === 204) {
           Object.defineProperty(this, 'status', { get: () => 204, configurable: true })
           Object.defineProperty(this, 'statusText', { get: () => 'No Content', configurable: true })
           Object.defineProperty(this, 'response', { get: () => '', configurable: true })
@@ -403,9 +370,6 @@ declare global {
     Sluice?: {
       userId: string
       proxyBase: string
-      setConsent: (
-        purposes: Record<string, boolean>,
-      ) => Promise<{ ok: boolean; replayed?: number; error?: string }>
     }
     __sluiceConfig?: Partial<ClientConfig>
     /** Set by init() so a second load cannot wrap the patches a second time. */

@@ -46,8 +46,16 @@ describe('buildConfig', () => {
     const config = buildConfig({})
     expect(config.port).toBe(INIT_DEFAULTS.port)
     expect(config.redisUrl).toBe(INIT_DEFAULTS.redisUrl)
-    expect(config.adminSecret).toBe(INIT_DEFAULTS.adminSecret)
     expect(config.allowedOrigins).toEqual([])
+  })
+
+  // There is no safe fixed admin secret: a default one is a published
+  // credential for every install that accepts it.
+  it('generates a distinct admin secret rather than defaulting to a known one', () => {
+    const first = buildConfig({}).adminSecret
+    const second = buildConfig({}).adminSecret
+    expect(first.length).toBeGreaterThan(16)
+    expect(first).not.toBe(second)
   })
 
   it('treats an empty origin list as allow-all rather than a blank entry', () => {

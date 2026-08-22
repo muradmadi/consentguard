@@ -158,7 +158,7 @@ describe('AuditRecordSchema', () => {
     expect(parsed.transformations).toEqual([])
   })
 
-  it.each(['forwarded', 'blocked', 'buffered', 'failed'])('accepts decision %s', (decision) => {
+  it.each(['forwarded', 'blocked', 'failed'])('accepts decision %s', (decision) => {
     expect(AuditRecordSchema.parse({ ...minimal, decision }).decision).toBe(decision)
   })
 

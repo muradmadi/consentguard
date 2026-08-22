@@ -23,8 +23,8 @@ Everything below follows from that.
 ## Remove
 
 Consent is an _input_ to the firewall, not a feature of it. It arrives from an external
-CMP over `/webhooks/:provider`. The following exist only to make Sluice a consent
-product, and they go:
+CMP over `/webhooks/:provider`. The following existed only to make Sluice a consent
+product, and are **gone** — carried out as part of build item 5:
 
 - **`POST /consent/self`** (`app.ts`) — a browser-callable consent write API. This is
   CMP surface. Consent comes in over the webhook or not at all.
@@ -34,8 +34,9 @@ product, and they go:
   contents of tracking events for users with no consent record, then replays them.
   It is consent-flow machinery, it processes personal data before a lawful basis
   exists, and it is not firewall behaviour.
-- The `202` response from `/ingest`. After this, `/ingest` returns `204`, `400`, `403`,
-  or `502` only.
+- The `202` response from `/ingest`. `/ingest` now returns `204`, `400`, `403`, `413`,
+  or `502` only. `413` is new: the body is capped, and an oversized one is refused
+  before it is read.
 
 ## Keep, but do not extend
 
@@ -112,9 +113,8 @@ carrying payload, and rewriting a segment changes what is being called. And a UR
 returned byte-identical when nothing fires, rather than re-encoded, because a vendor may
 be checking a signature over it.
 
-Still open, and out of this commit: the buffer stores `originalUrl` with its query string
-intact, so personal data sits in storage for a user with no consent record. Deleting
-buffering (see **Remove**) resolves it.
+Resolved by item 5: the buffer stored `originalUrl` with its query string intact, so
+personal data sat in storage for a user with no consent record. Buffering is deleted.
 
 ### 4. Close the interception holes — **done, except identity**
 
@@ -151,7 +151,52 @@ page load. It needs a session-scoped identifier promoted to a persistent one onl
 consent grant, which touches the server's identity resolution and the consent gate — an
 identity change, not an interception one.
 
-### 5. Make the registry honest
+### 5. Shut the open door — **done**
+
+Items 1–4 all assume the firewall only ever calls the vendor. It did not.
+
+`?original=` and `X-Original-Url` name the URL the browser was heading to, and
+`buildForward` forwarded there without ever checking it against the destination rule.
+Combined with `POST /consent/self` — which let a browser grant itself any purpose for
+any user id it invented — two unauthenticated requests on stock configuration reached
+any host the server could route to, and the audit recorded it as a clean forward to the
+vendor. The response never returns to the caller, so it was a blind exfiltration and
+internal-scanning primitive rather than a read. Five smaller holes were open alongside
+it, and all six are closed:
+
+- **Egress is now derived from the rule.** `engine/egress.ts` requires a forward's host
+  to match an endpoint the destination rule declares, or the host of its `upstreamUrl`.
+  Internal addresses — loopback, private, link-local, the metadata address, and the
+  hostnames that resolve inside a network — are refused ahead of the allowlist, so a
+  rule cannot declare its way to one. Redirects are not followed: a `3xx` is a second
+  destination chosen by whoever answered the first. A refusal is audited as `blocked`
+  with the reason, because a refusal is evidence too.
+- **The admin secret is no longer compiled into the dashboard.** It was read from
+  `VITE_ADMIN_SECRET`, which Vite inlines at build time, into a bundle the proxy serves
+  unauthenticated at `/dashboard/*` — so the credential for `/audit`, `/api/rules` and
+  `/api/debug/reset` was readable by anyone who opened the page. The operator enters it
+  at runtime and it lives in session storage. `just check-dist` fails the gate on
+  anything secret-shaped in `packages/*/dist`. The fixed development token is gone from
+  the server and the CLI too: both generate one instead.
+- **An absent `Origin` is no longer permission.** A configured allowlist stopped
+  browsers and nothing else, because every tool that is not a browser omits the header.
+- **`/metrics` takes a bearer.** It served the same per-destination counters as
+  `/api/stats` to anyone — which vendors a site uses, and how much of its traffic is
+  blocked. Admin secret, or an explicitly configured `SLUICE_METRICS_TOKEN`.
+- **The body is capped** at `SLUICE_MAX_BODY_BYTES` (64 KiB). `/ingest` is public and
+  unauthenticated, and a beacon is a few hundred bytes; the stream is counted as it
+  arrives, because `Content-Length` is a claim.
+
+The **Remove** list above was carried out in the same change, because `POST
+/consent/self` was the escalation step in the chain and buffering is what stored full
+tracking payloads for users who had given no consent.
+
+Still open, and deliberately not done here: the egress check reads the parsed hostname
+rather than resolving it, so a destination rule declaring a domain that resolves to a
+private address still reaches it. That needs a resolver on the hot path, and reaching it
+needs the ability to write destination rules in the first place.
+
+### 6. Make the registry honest
 
 `adapters/index.ts` registers exactly one adapter (GA4). Five other destinations are
 listed in the registry and cannot forward to their real vendor — `facebook.ts` has a
@@ -161,6 +206,11 @@ Either write the adapter or remove the entry. A registry that lists destinations
 cannot serve is the same class of dishonesty as the audit bug in item 1.
 
 Priority order if adapters get written: Meta CAPI, then Mixpanel.
+
+Note that until then those five destinations forward nowhere: the passthrough now has to
+satisfy the egress allowlist, and `facebook.ts`'s `<PIXEL_ID>` upstream still cannot
+work. The registry lists them; the firewall refuses them. That is the honest failure
+mode, not a substitute for fixing it.
 
 ## Non-goals
 

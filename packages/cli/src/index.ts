@@ -12,6 +12,22 @@ declare const __CLI_VERSION__: string
 
 const program = new Command()
 
+/**
+ * The admin bearer for a CLI call. There is no default: a fallback that every
+ * install shares is a published credential, and guessing wrong here silently
+ * reports "Unauthorized" instead of saying what is missing.
+ */
+function requireSecret(fromFlag?: string): string {
+  const secret = fromFlag || process.env.ADMIN_SECRET
+  if (!secret) {
+    console.error(
+      pc.red('❌ No admin secret. Pass --secret, or set ADMIN_SECRET in the environment.'),
+    )
+    process.exit(1)
+  }
+  return secret
+}
+
 program
   .name('sluice')
   .description('Sluice CLI - Manage your privacy proxy')
@@ -39,8 +55,7 @@ program
       {
         type: 'password',
         name: 'adminSecret',
-        message: 'Admin secret (bearer token for /audit, /api/rules, etc.)',
-        initial: 'dev-admin-secret',
+        message: 'Admin secret (bearer token for /audit, /api/rules — blank to generate one)',
       },
       {
         type: 'text',
@@ -55,6 +70,9 @@ program
     const configPath = path.join(process.cwd(), '.sluicerc.json')
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
     console.log(pc.green(`\nCreated ${pc.bold('.sluicerc.json')}`))
+    if (!response.adminSecret) {
+      console.log(pc.dim('Generated admin secret: ') + pc.bold(config.adminSecret))
+    }
 
     const generateProduction = await prompts({
       type: 'confirm',
@@ -128,7 +146,7 @@ program
 
     // ISO 8601 timestamps sort lexicographically, so a string cursor works.
     let lastTimestamp = ''
-    const secret = options.secret || process.env.ADMIN_SECRET || 'dev-admin-secret'
+    const secret = requireSecret(options.secret)
 
     const poll = async () => {
       try {
@@ -148,9 +166,7 @@ program
               ? pc.red('BLOCKED')
               : log.decision === 'failed'
                 ? pc.red('FAILED')
-                : log.decision === 'buffered'
-                  ? pc.yellow('BUFFERED')
-                  : pc.green('FORWARDED')
+                : pc.green('FORWARDED')
 
           console.log(
             `${time} | ${pc.bold(log.destination.padEnd(15))} | ${decision.padEnd(20)} | ${pc.dim(log.userId)}`,
@@ -180,7 +196,7 @@ program
   .action(async (options) => {
     console.log(pc.cyan('🛡️  Sluice System Status\n'))
 
-    const secret = options.secret || process.env.ADMIN_SECRET || 'dev-admin-secret'
+    const secret = requireSecret(options.secret)
 
     // 1. Check Proxy Heartbeat
     try {

@@ -59,12 +59,16 @@ fmt-check:
 typecheck:
     bun run typecheck
 
-# The full gate: everything that must pass before committing
-check: lint fmt-check typecheck build test
+# Fail if a built bundle carries anything secret-shaped
+check-dist:
+    bun run check:dist
 
-# Start the built proxy on PORT with in-memory storage
+# The full gate: everything that must pass before committing
+check: lint fmt-check typecheck build check-dist test
+
+# Start the built proxy on PORT with in-memory storage (prints a dev admin token)
 serve port="3000":
-    PORT={{ port }} SLUICE_STORAGE=memory ADMIN_SECRET=dev-admin-secret node packages/server/dist/index.js
+    PORT={{ port }} SLUICE_STORAGE=memory node packages/server/dist/index.js
 
 # Remove build output and caches
 clean:

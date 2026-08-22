@@ -22,8 +22,20 @@ export interface SluiceConfig {
 export const INIT_DEFAULTS = {
   port: 3000,
   redisUrl: 'redis://localhost:6379',
-  adminSecret: 'dev-admin-secret',
 } as const
+
+/**
+ * A fresh admin bearer for a new install.
+ *
+ * `init` used to offer a fixed development token, which every install that
+ * accepted the default then shared with every other one. Generating it means
+ * the operator has to lose it deliberately rather than by pressing enter.
+ */
+export function generateAdminSecret(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
+}
 
 /** Parse a comma-separated origin list, dropping blanks and surrounding space. */
 export function parseOrigins(raw?: string): string[] {
@@ -36,13 +48,14 @@ export function parseOrigins(raw?: string): string[] {
 /**
  * Build the config written to .sluicerc.json. Answers can be partial — a
  * cancelled prompt leaves fields undefined — so every field falls back to the
- * same default the prompt offered.
+ * same default the prompt offered. An unanswered admin secret is generated
+ * rather than defaulted, because there is no safe fixed value for one.
  */
 export function buildConfig(answers: InitAnswers): SluiceConfig {
   return {
     port: answers.port ?? INIT_DEFAULTS.port,
     redisUrl: answers.redisUrl || INIT_DEFAULTS.redisUrl,
-    adminSecret: answers.adminSecret || INIT_DEFAULTS.adminSecret,
+    adminSecret: answers.adminSecret || generateAdminSecret(),
     allowedOrigins: parseOrigins(answers.allowedOrigins),
   }
 }

@@ -1,6 +1,6 @@
 import { Hono, Context } from 'hono'
 import { cors } from 'hono/cors'
-import { getCookie, setCookie } from 'hono/cookie'
+import { getCookie } from 'hono/cookie'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { ConsentStateSchema } from '@sluice/shared'
 import { ConsentManager } from './engine/consent'
@@ -8,7 +8,7 @@ import { scrubPayload } from './engine/transformer'
 import { scrubUrl } from './engine/url'
 import { metrics } from './engine/metrics'
 import { AuditLogger } from './engine/audit'
-import { BufferManager } from './engine/buffer'
+import { checkEgress } from './engine/egress'
 import { RuleManager } from './engine/rules'
 import { createWebhookRouter } from './webhooks/cmp'
 import { StorageProvider, HybridStorageProvider } from './engine/storage'
@@ -28,7 +28,6 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     config.defaultConsent as 'allow' | 'deny',
   )
   const auditLogger = new AuditLogger(effectiveStorage)
-  const bufferManager = new BufferManager(effectiveStorage)
   const ruleManager = new RuleManager(effectiveStorage)
 
   app.use('*', requestLogger)
@@ -53,9 +52,9 @@ export function createApp(storage: StorageProvider, env: any = {}) {
   app.get('/dashboard', (c) => c.redirect('/dashboard/index.html'))
   app.use('/sluice-client.js', serveStatic({ path: clientBundlePath }))
 
-  // CORS: browser calls to /ingest and /consent/self must send credentials
-  // (the cuid cookie). We reflect the request's origin only when it's in the
-  // allowlist so cookies flow correctly, and 403 elsewhere at the app level.
+  // CORS: browser calls to /ingest must send credentials (the cuid cookie).
+  // We reflect the request's origin only when it's in the allowlist so cookies
+  // flow correctly, and 403 elsewhere at the app level.
   app.use(
     '*',
     cors({
@@ -84,69 +83,13 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400)
 
     await consentManager.setConsent(userId, parsed.data)
-    const replayed = await replayBuffered(userId, parsed.data, {
-      consentManager,
-      auditLogger,
-      ruleManager,
-      config,
-      bufferManager,
-    })
-    return c.json({ status: 'saved', replayed })
+    return c.json({ status: 'saved' })
   })
 
   app.get('/consent/:userId', async (c) => {
     if (!requireAdmin(c, config)) return c.json({ error: 'Unauthorized' }, 403)
     const userId = c.req.param('userId')
     return c.json(await consentManager.getConsent(userId))
-  })
-
-  /**
-   * Public: browser-callable consent update. No admin secret. Trusts the
-   * cuid cookie (or X-Consent-UserId header) and the request's Origin,
-   * which is validated by the allowlist below.
-   */
-  app.post('/consent/self', async (c) => {
-    if (!requireAllowedOrigin(c, config)) return c.json({ error: 'origin_not_allowed' }, 403)
-
-    const cookieUserId = getCookie(c, 'cuid')
-    const headerUserId = c.req.header('X-Consent-UserId')
-    let userId = cookieUserId || headerUserId
-
-    // No cookie yet? Mint one so the same browser is identifiable next time.
-    if (!userId) {
-      userId = generateUserId()
-      setCookie(c, 'cuid', userId, {
-        path: '/',
-        sameSite: 'Lax',
-        httpOnly: false,
-        maxAge: 60 * 60 * 24 * 365,
-      })
-    }
-
-    let body: any
-    try {
-      body = await c.req.json()
-    } catch {
-      return c.json({ error: 'invalid_json' }, 400)
-    }
-
-    const parsed = ConsentStateSchema.safeParse({
-      userId,
-      purposes: { necessary: true, ...(body.purposes || {}) },
-      timestamp: typeof body.timestamp === 'number' ? body.timestamp : Date.now(),
-      metadata: body.metadata,
-    })
-    if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400)
-
-    await consentManager.setConsent(userId, parsed.data)
-    const replayed = await replayBuffered(userId, parsed.data, {
-      consentManager,
-      auditLogger,
-      ruleManager,
-      config,
-      bufferManager,
-    })
-    return c.json({ status: 'saved', userId, replayed })
   })
 
   /**
@@ -174,7 +117,14 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     return c.json(metrics.getMetrics())
   })
 
+  // Same counters as /api/stats, broken down per destination: which vendors a
+  // site uses and how much of its traffic is being blocked. That is not public
+  // information, so it takes the admin bearer — or a scrape token, when the
+  // operator has explicitly configured one for a metrics collector.
   app.get('/metrics', (c) => {
+    if (!requireAdmin(c, config) && !requireScrapeToken(c, config)) {
+      return c.json({ error: 'Unauthorized' }, 403)
+    }
     if (c.req.query('format') === 'prometheus') {
       return c.text(metrics.toPrometheus())
     }
@@ -200,6 +150,8 @@ export function createApp(storage: StorageProvider, env: any = {}) {
    *   - the request's Origin to be in SLUICE_ALLOWED_ORIGINS (or the list is empty in dev)
    *   - a resolvable user id (header, cookie, or query param)
    *   - a destination the registry (or override) knows about
+   *   - a body no larger than SLUICE_MAX_BODY_BYTES
+   *   - a forward URL the destination's own rule declares
    */
   app.all('/ingest/:destination', async (c) => {
     if (!requireAllowedOrigin(c, config)) return c.json({ error: 'origin_not_allowed' }, 403)
@@ -222,8 +174,21 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     }
 
     // Read the body once — we need it for both JSON parsing and raw-string
-    // access (form-encoded vendors like GA4 beacons).
-    const rawBody = c.req.header('Content-Length') === '0' ? '' : await c.req.text()
+    // access (form-encoded vendors like GA4 beacons) — and never more of it
+    // than a beacon could plausibly be. `/ingest` is public and unauthenticated,
+    // so an unbounded read is memory any caller can spend.
+    const rawBody = await readCappedBody(c, config.maxBodyBytes)
+    if (rawBody === null) {
+      metrics.recordRequest(destination, 'blocked')
+      await auditLogger.log({
+        userId,
+        destination,
+        decision: 'blocked',
+        reason: 'payload_too_large',
+      })
+      return c.json({ error: 'payload_too_large' }, 413)
+    }
+
     let jsonBody: any = null
     if (rawBody && (c.req.header('Content-Type') || '').includes('application/json')) {
       try {
@@ -238,27 +203,6 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     const rule = await ruleManager.getRule(destination)
 
     if (!consentManager.hasConsent(consent, rule.category)) {
-      if (!consent._exists && config.bufferPending) {
-        await bufferManager.bufferRequest(userId, {
-          destination,
-          payload: jsonBody ?? rawBody,
-          method: c.req.method,
-          headers: {
-            'Content-Type': c.req.header('Content-Type') || 'application/json',
-            'User-Agent': c.req.header('User-Agent') || 'Sluice Proxy',
-          },
-          originalUrl: c.req.header('X-Original-Url') || rule.upstreamUrl,
-        })
-        await auditLogger.log({
-          userId,
-          destination,
-          decision: 'buffered',
-          reason: 'new_user_pending_consent',
-          purposesRequired: rule.category,
-        })
-        return c.body(null, 202)
-      }
-
       metrics.recordRequest(destination, 'blocked')
       await auditLogger.log({
         userId,
@@ -306,6 +250,10 @@ export function createApp(storage: StorageProvider, env: any = {}) {
         method: forward.method,
         headers: forward.headers,
         body: forward.method === 'GET' || forward.method === 'HEAD' ? undefined : forward.body,
+        // A redirect is a second destination the rule never declared, chosen by
+        // whoever answered the first one. `manual` hands the 3xx back as-is, so
+        // it falls into the not-ok branch and is audited as an upstream status.
+        redirect: 'manual',
       })
       if (!response.ok) {
         metrics.recordError()
@@ -369,22 +317,76 @@ async function requestLogger(c: Context, next: () => Promise<void>): Promise<voi
 }
 
 /**
- * Turn an intercepted request into the concrete upstream call, scrubbed.
+ * Read the request body, refusing anything past `limit` instead of buffering it.
  *
- * Both the live ingest path and the buffer replay go through here, so the
- * "scrub before egress, always" invariant lives in exactly one place. Every
+ * `Content-Length` is a claim, not a measurement, so the stream is counted as it
+ * arrives and abandoned the moment it goes over. A returned `null` means the
+ * body was too large and was never fully read.
+ */
+async function readCappedBody(c: Context, limit: number): Promise<string | null> {
+  const declared = Number(c.req.header('Content-Length'))
+  if (Number.isFinite(declared) && declared > limit) return null
+
+  const body = c.req.raw.body
+  if (!body) return ''
+
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > limit) {
+      await reader.cancel()
+      return null
+    }
+    chunks.push(value)
+  }
+
+  const joined = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    joined.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(joined)
+}
+
+/**
+ * Turn an intercepted request into the concrete upstream call, scrubbed and
+ * addressed somewhere the destination rule allows.
+ *
+ * Every forward goes through here, so the "scrub before egress, always" and
+ * "only where the rule says" invariants live in exactly one place. Every
  * outcome that is not `ok` means the request is not forwarded.
  */
 type BuildOutcome = { ok: true; forward: VendorForward } | { ok: false; reason: string }
 
 async function buildForward(ctx: VendorContext): Promise<BuildOutcome> {
+  const built = await routeForward(ctx)
+  if (!built.ok) return built
+
+  const forward = withScrubbedUrl(built.forward, ctx)
+
+  // Last gate before egress, applied to the URL that will actually be fetched
+  // rather than to the string the caller supplied. An adapter's own URL is
+  // checked too: putting it here leaves no branch that can forget.
+  const verdict = checkEgress(forward.url, ctx.rule)
+  if (!verdict.ok) return { ok: false, reason: verdict.reason }
+
+  return { ok: true, forward }
+}
+
+async function routeForward(ctx: VendorContext): Promise<BuildOutcome> {
   const adapter = getAdapter(ctx.rule.id)
 
   if (adapter) {
     const result = await adapter.buildRequest(ctx)
     if (!result) return { ok: false, reason: 'adapter_returned_null' }
     if ('skip' in result) return { ok: false, reason: `adapter_skip:${result.reason}` }
-    return { ok: true, forward: withScrubbedUrl(result, ctx) }
+    return { ok: true, forward: result }
   }
 
   // A pixel — an <img> beacon — carries its whole payload in the query string
@@ -395,16 +397,13 @@ async function buildForward(ctx: VendorContext): Promise<BuildOutcome> {
   if (!ctx.rawBody && ctx.originalUrl) {
     return {
       ok: true,
-      forward: withScrubbedUrl(
-        {
-          url: ctx.originalUrl,
-          method: 'GET',
-          headers: { 'User-Agent': ctx.headers['user-agent'] || 'Sluice Proxy' },
-          body: '',
-          report: [],
-        },
-        ctx,
-      ),
+      forward: {
+        url: ctx.originalUrl,
+        method: 'GET',
+        headers: { 'User-Agent': ctx.headers['user-agent'] || 'Sluice Proxy' },
+        body: '',
+        report: [],
+      },
     }
   }
 
@@ -421,19 +420,16 @@ async function buildForward(ctx: VendorContext): Promise<BuildOutcome> {
   const scrub = scrubPayload(ctx.jsonBody, ctx.rule, { detectors: ctx.serverConfig.detectors })
   return {
     ok: true,
-    forward: withScrubbedUrl(
-      {
-        url: ctx.originalUrl || ctx.rule.upstreamUrl,
-        method: ctx.method,
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': ctx.headers['user-agent'] || 'Sluice Proxy',
-        },
-        body: JSON.stringify(scrub.payload),
-        report: scrub.report,
+    forward: {
+      url: ctx.originalUrl || ctx.rule.upstreamUrl,
+      method: ctx.method,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': ctx.headers['user-agent'] || 'Sluice Proxy',
       },
-      ctx,
-    ),
+      body: JSON.stringify(scrub.payload),
+      report: scrub.report,
+    },
   }
 }
 
@@ -443,8 +439,8 @@ async function buildForward(ctx: VendorContext): Promise<BuildOutcome> {
  *
  * The passthrough forwards to the URL the browser originally targeted, so its
  * query string reaches the vendor verbatim unless it is scrubbed here. Adapters
- * build their own URLs and go through this too: putting it on every forward
- * leaves no branch where it can be forgotten.
+ * build their own URLs and go through this too, because `buildForward` applies
+ * it to whatever the routing step hands back.
  */
 function withScrubbedUrl(forward: VendorForward, ctx: VendorContext): VendorForward {
   const scrub = scrubUrl(forward.url, ctx.rule, { detectors: ctx.serverConfig.detectors })
@@ -457,17 +453,26 @@ function requireAdmin(c: Context, config: ServerConfig): boolean {
   return auth === `Bearer ${config.adminSecret}`
 }
 
+/** Read-only scrape access for a metrics collector. Off unless configured. */
+function requireScrapeToken(c: Context, config: ServerConfig): boolean {
+  if (!config.metricsToken) return false
+  return c.req.header('Authorization') === `Bearer ${config.metricsToken}`
+}
+
+/**
+ * An empty allowlist is permissive; that is a dev-only default.
+ *
+ * A configured allowlist used to treat a missing `Origin` as permission, on the
+ * grounds that non-browser callers are fine. Every tool that is not a browser
+ * omits the header, so the allowlist stopped browsers and nothing else. If the
+ * operator has said which origins may use the firewall, a request that does not
+ * say where it is from is not one of them.
+ */
 function requireAllowedOrigin(c: Context, config: ServerConfig): boolean {
   if (config.allowedOrigins.length === 0) return true
   const origin = c.req.header('Origin')
-  if (!origin) return true // non-browser callers (curl, server-to-server) are fine
+  if (!origin) return false
   return config.allowedOrigins.includes(origin)
-}
-
-function lowercaseRecord(headers: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [key, value] of Object.entries(headers)) out[key.toLowerCase()] = value
-  return out
 }
 
 function lowercaseHeaders(c: Context): Record<string, string> {
@@ -478,101 +483,4 @@ function lowercaseHeaders(c: Context): Record<string, string> {
     out[key.toLowerCase()] = value
   })
   return out
-}
-
-function generateUserId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return 'u_' + Math.random().toString(36).slice(2, 15)
-}
-
-async function replayBuffered(
-  userId: string,
-  consent: any,
-  deps: {
-    consentManager: ConsentManager
-    auditLogger: AuditLogger
-    ruleManager: RuleManager
-    bufferManager: BufferManager
-    config: ServerConfig
-  },
-): Promise<number> {
-  const { consentManager, auditLogger, ruleManager, bufferManager, config } = deps
-  const buffered = await bufferManager.getAndClearBuffer(userId)
-  if (buffered.length === 0) return 0
-
-  // Fire-and-forget so the caller isn't blocked on upstream latency.
-  ;(async () => {
-    for (const req of buffered) {
-      const rule = await ruleManager.getRule(req.destination)
-      if (!consentManager.hasConsent(consent, rule.category)) {
-        await auditLogger.log({
-          userId,
-          destination: req.destination,
-          decision: 'blocked',
-          reason: 'replayed_but_still_no_consent',
-          purposesRequired: rule.category,
-        })
-        continue
-      }
-
-      // Replay goes through the same builder as the live path. A buffered
-      // payload we stored as a raw string has no JSON shape to scrub, so it is
-      // dropped rather than forwarded.
-      const isObject = !!req.payload && typeof req.payload === 'object'
-      const built = await buildForward({
-        method: req.method,
-        originalUrl: req.originalUrl || rule.upstreamUrl || '',
-        query: new URLSearchParams(),
-        headers: lowercaseRecord(req.headers),
-        jsonBody: isObject ? req.payload : null,
-        rawBody: typeof req.payload === 'string' ? req.payload : '',
-        rule,
-        serverConfig: config,
-      })
-
-      if (!built.ok) {
-        await auditLogger.log({
-          userId,
-          destination: req.destination,
-          decision: 'blocked',
-          reason: `replayed_${built.reason}`,
-          purposesRequired: rule.category,
-        })
-        continue
-      }
-
-      const { forward } = built
-      try {
-        const response = await fetch(forward.url, {
-          method: forward.method,
-          headers: forward.headers,
-          body: forward.method === 'GET' || forward.method === 'HEAD' ? undefined : forward.body,
-        })
-        await auditLogger.log({
-          userId,
-          destination: req.destination,
-          decision: response.ok ? 'forwarded' : 'failed',
-          reason: response.ok
-            ? 'replayed_from_buffer'
-            : `replayed_upstream_status:${response.status}`,
-          purposesRequired: rule.category,
-          transformations: forward.report,
-        })
-      } catch (e) {
-        console.error(`[Sluice] Replay failed for ${req.destination}:`, e)
-        await auditLogger.log({
-          userId,
-          destination: req.destination,
-          decision: 'failed',
-          reason: 'replayed_upstream_unreachable',
-          purposesRequired: rule.category,
-          transformations: forward.report,
-        })
-      }
-    }
-  })()
-
-  return buffered.length
 }

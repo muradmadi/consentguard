@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Shield, ChevronRight } from 'lucide-react'
-import { fetchStats, fetchRules, fetchAuditLogs, updateRule } from './lib/api'
+import { fetchStats, fetchRules, fetchAuditLogs, updateRule, UnauthorizedError } from './lib/api'
+import { getToken, setToken, clearToken } from './lib/auth'
+import { TokenGate } from './components/TokenGate'
 import { RuleEditor } from './components/RuleEditor'
 import { LiveTraffic } from './components/LiveTraffic'
 import { AlertCircle } from 'lucide-react'
@@ -9,7 +11,6 @@ import type { AuditRecord, DestinationRule } from '@sluice/shared'
 /** Blocked and failed both mean nothing reached the vendor, but for different reasons. */
 function decisionBadge(decision: AuditRecord['decision']): string {
   if (decision === 'blocked' || decision === 'failed') return 'badge-error'
-  if (decision === 'buffered') return ''
   return 'badge-success'
 }
 
@@ -35,8 +36,19 @@ function App() {
   const [selectedRule, setSelectedRule] = useState<DestinationRule | null>(null)
   const [selectedLog, setSelectedLog] = useState<AuditRecord | null>(null)
   const [, setIsLoading] = useState(false)
+  const [authed, setAuthed] = useState(() => getToken() !== '')
+  const [authError, setAuthError] = useState('')
+
+  /** A rejected token means the operator mistyped it or it was rotated. */
+  const handleUnauthorized = useCallback(() => {
+    clearToken()
+    setAuthed(false)
+    setAuthError('That token was rejected by the proxy.')
+  }, [])
 
   useEffect(() => {
+    if (!authed) return
+
     const loadData = async () => {
       try {
         const [s, r, l] = await Promise.all([fetchStats(), fetchRules(), fetchAuditLogs()])
@@ -44,13 +56,14 @@ function App() {
         setRules(r)
         setLogs(l)
       } catch (e) {
+        if (e instanceof UnauthorizedError) return handleUnauthorized()
         console.error('Failed to load data', e)
       }
     }
     loadData()
     const interval = setInterval(loadData, 5000)
     return () => clearInterval(interval)
-  }, [])
+  }, [authed, handleUnauthorized])
 
   const handleSaveRule = async (updatedRule: DestinationRule) => {
     setIsLoading(true)
@@ -59,11 +72,25 @@ function App() {
       setRules(rules.map((r) => (r.id === updatedRule.id ? updatedRule : r)))
       setSelectedRule(null)
     } catch (e) {
+      if (e instanceof UnauthorizedError) return handleUnauthorized()
       console.error('[Sluice] Failed to save rule', e)
       alert('Failed to save rule')
     } finally {
       setIsLoading(false)
     }
+  }
+
+  if (!authed) {
+    return (
+      <TokenGate
+        error={authError}
+        onSubmit={(token) => {
+          setToken(token)
+          setAuthError('')
+          setAuthed(true)
+        }}
+      />
+    )
   }
 
   return (
@@ -418,14 +445,7 @@ function App() {
                           <strong>{log.destination}</strong>
                         </td>
                         <td>
-                          <span
-                            className={`badge ${decisionBadge(log.decision)}`}
-                            style={
-                              log.decision === 'buffered'
-                                ? { background: '#0070f3', color: 'white', fontWeight: 600 }
-                                : {}
-                            }
-                          >
+                          <span className={`badge ${decisionBadge(log.decision)}`}>
                             {log.decision.toUpperCase()}
                           </span>
                           {log.transformations.length > 0 && (

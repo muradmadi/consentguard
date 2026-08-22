@@ -16,6 +16,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "turbo run typecheck",
+    "check:dist": "node scripts/check-dist-secrets.mjs",
     "test": "turbo run test"
   },
   "devDependencies": {

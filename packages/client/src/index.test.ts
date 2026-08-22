@@ -67,14 +67,21 @@ afterEach(() => {
 })
 
 describe('public API', () => {
-  it('exposes userId, proxyBase and setConsent on window.Sluice', async () => {
+  it('exposes userId and proxyBase on window.Sluice', async () => {
     await loadClient()
     const sluice = (window as any).Sluice
     expect(sluice).toBeDefined()
     expect(typeof sluice.userId).toBe('string')
     expect(sluice.userId.length).toBeGreaterThan(0)
     expect(sluice.proxyBase).toBe(`${window.location.origin}/analytics`)
-    expect(typeof sluice.setConsent).toBe('function')
+  })
+
+  // Consent is an input to the firewall, delivered by a CMP over a webhook.
+  // A page that can assert its own consent is the escalation step that turned
+  // the proxy into an open forwarder for anyone who could reach it.
+  it('gives the page no way to grant its own consent', async () => {
+    await loadClient()
+    expect((window as any).Sluice.setConsent).toBeUndefined()
   })
 
   it('honours an absolute proxyUrl over proxyPath', async () => {

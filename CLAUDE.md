@@ -59,14 +59,16 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
 `POST /ingest/:destination` in `packages/server/src/app.ts` is the hot path. In order:
 
 1. **Origin check** — `requireAllowedOrigin`. Not in `SLUICE_ALLOWED_ORIGINS` → `403`.
-   An empty allowlist is permissive; that is a dev-only default.
+   An empty allowlist is permissive; that is a dev-only default. A non-empty one
+   requires the header: a request that will not say where it is from is not on the list.
 2. **Identity** — `X-Consent-UserId` header, then `cuid` cookie, then `?cuid=`,
    then `?sluice_user_id=`. No identity → `204`.
 3. **Destination known?** — `RuleManager.isSupported`. Unknown → `400`.
-4. **Body read once** into `rawBody` + `jsonBody` (vendors like GA4 send form-encoded).
+4. **Body read once**, capped at `SLUICE_MAX_BODY_BYTES` (64 KiB default), into
+   `rawBody` + `jsonBody` (vendors like GA4 send form-encoded). Over the cap → `413`.
+   `Content-Length` is a claim, so the stream is counted as it arrives.
 5. **Consent gate** — `ConsentManager.hasConsent(consent, rule.category)`. Denied →
-   buffer (`202`) if the user has no consent record and `BUFFER_PENDING` is on,
-   otherwise blocked (`204`).
+   blocked (`204`).
 6. **Scrub + build** — a registered `VendorAdapter` translates the intercepted beacon
    into the vendor's server-side schema and calls `scrubPayload` itself. With no
    adapter, a generic JSON passthrough scrubs and forwards to `rule.upstreamUrl`.
@@ -77,9 +79,12 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
    A bodyless request with an original URL is a pixel: its whole payload is the query
    string, so it forwards as a `GET` to that URL and `scrubUrl` alone is a complete
    scrub. `unscrubbable_payload` therefore means a body that exists and will not parse.
-7. **Forward upstream**, then audit + metrics. Success → `204`, upstream failure → `502`.
-   The audit is written after the upstream call resolves, so `decision` states what
-   happened rather than what was intended.
+7. **Egress check** — `checkEgress` on the URL that will actually be fetched. Its host
+   must be one the destination rule declares, and must not be an internal address.
+   Refused → `blocked` with the reason in the audit.
+8. **Forward upstream** with `redirect: 'manual'`, then audit + metrics. Success → `204`,
+   upstream failure → `502`. The audit is written after the upstream call resolves, so
+   `decision` states what happened rather than what was intended.
 
 ### Where things live
 
@@ -91,15 +96,23 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
   in the payload applying them. `scrubPayload` runs it after the declared pass, so a field
   a rule already hashed is not re-detected. Configured by `SLUICE_DETECTORS`; `off`
   disables it.
+- **Egress allowlist** — `engine/egress.ts` decides whether a forward may be made at all.
+  `?original=` and `X-Original-Url` are attacker-controlled, so the destination rule is
+  the authority: a forward's host must match an endpoint the rule declares (domain half
+  only — the path addresses the vendor's API) or the host of its `upstreamUrl`. Internal
+  addresses are refused ahead of the allowlist, so a rule cannot declare its way to one.
+  It reads the parsed hostname, not the URL string; it does not resolve DNS, so a declared
+  domain pointing at a private address still passes, which needs rule-write access.
 - **URL scrub** — `engine/url.ts` runs the query string of an outbound URL through
   `scrubPayload`, treating each parameter as a field. A beacon carries as much personal
   data there as in its body, and the passthrough forwards to the URL the browser
   originally targeted. The path is left alone: it addresses the vendor's API rather than
   carrying payload.
 - **Forward builder** — `buildForward` in `app.ts` turns a request into the scrubbed
-  upstream call, and scrubs the URL of every forward it hands back — an adapter's own
-  URL included. Both the live path and buffer replay go through it, so the
-  scrub-before-egress rule lives in one place.
+  upstream call. `routeForward` picks the adapter, pixel, or passthrough shape;
+  `buildForward` then scrubs the URL and runs the egress check over whatever came back —
+  an adapter's own URL included — so scrub-before-egress and only-where-the-rule-says
+  each live in exactly one place.
 - **Destination rules** — `destinations/<vendor>.ts`, registered in `destinations/registry.ts`.
   A rule is declarative: `id`, `category`, `endpoints`, optional `upstreamUrl`, `transformations[]`.
 - **Vendor adapters** — `destinations/adapters/<vendor>.ts`, registered in `adapters/index.ts`.
@@ -126,6 +139,13 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
   not been through `scrubPayload` or an adapter that calls it. That covers the URL as
   well as the body — a query string is payload. A body that cannot be parsed cannot be
   scrubbed, so it is blocked rather than forwarded.
+- **Egress only where the rule says.** The firewall calls hosts a destination rule
+  declares and nothing else, and does not follow redirects. The caller names a URL; it
+  does not choose one.
+- **No secret in a shipped artifact.** The dashboard is served unauthenticated, so the
+  admin bearer is entered at runtime and held in session storage. Never read it from a
+  build-time `VITE_*` variable. `just check-dist` fails the gate on anything
+  secret-shaped in `packages/*/dist`.
 - **The audit is derived, never declared.** `transformations` comes from the `ScrubResult`
   report — an entry means that transformation actually changed this payload. Never build
   it from `rule.transformations`, and never record the removed value.
@@ -135,7 +155,7 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
 `just` is the only entry point you need. `just` with no arguments lists everything.
 
 ```
-just check     # THE GATE: lint, fmt-check, typecheck, build, test. Must pass before commit.
+just check     # THE GATE: lint, fmt-check, typecheck, build, check-dist, test. Must pass before commit.
 just test      # tests only
 just watch server   # re-run one package's tests on change
 just dev       # everything in watch mode
@@ -194,4 +214,8 @@ Real, verified, and unfixed. Do not re-diagnose these from scratch:
   literal `<PIXEL_ID>` placeholder in its `upstreamUrl` and cannot work.
 - **`getDefaultRule` returns `category: 'necessary'`**, which `hasConsent` always
   grants. Reachable when a malformed rule override exists for an id the registry does
-  not know. Fail-open in a fail-closed system.
+  not know. Fail-open in a fail-closed system — though it now forwards nowhere, because
+  the rule declares no endpoints and the egress check refuses everything.
+- **The egress check does not resolve DNS.** A destination rule that declares a domain
+  which resolves to a private address still reaches it. Closing that needs a resolver on
+  the hot path; reaching it needs the ability to write destination rules.

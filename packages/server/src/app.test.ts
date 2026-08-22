@@ -6,7 +6,6 @@ const DEV_ENV = {
   NODE_ENV: 'test',
   ADMIN_SECRET: 'test-admin',
   SLUICE_DEFAULT_CONSENT: 'deny',
-  BUFFER_PENDING: 'false',
 }
 
 function withAllowedOrigin(origin: string, base?: HeadersInit): HeadersInit {
@@ -60,34 +59,22 @@ describe('Sluice server', () => {
     })
   })
 
-  describe('public /consent/self', () => {
-    it('persists consent using the X-Consent-UserId header when no cookie is present', async () => {
+  /**
+   * `POST /consent/self` let the browser assert its own consent, which is the
+   * escalation step that made the proxy an open forwarder: grant marketing for
+   * an id you invented, then name any URL you like. Consent is an input from an
+   * external CMP, never something the measured page says about itself.
+   */
+  describe('browser-asserted consent', () => {
+    it('has no public consent endpoint at all', async () => {
       const app = createApp(storage, DEV_ENV)
       const res = await app.request('/consent/self', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'browser-user-1' },
-        body: JSON.stringify({ purposes: { analytics: true } }),
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'attacker' },
+        body: JSON.stringify({ purposes: { marketing: true } }),
       })
-      expect(res.status).toBe(200)
-      const data = (await res.json()) as any
-      expect(data.userId).toBe('browser-user-1')
-
-      const stored = await storage.get('consent:browser-user-1')
-      const parsed = JSON.parse(stored!)
-      expect(parsed.purposes.analytics).toBe(true)
-      expect(parsed.purposes.necessary).toBe(true)
-    })
-
-    it('mints a cookie when the browser has no user id', async () => {
-      const app = createApp(storage, DEV_ENV)
-      const res = await app.request('/consent/self', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ purposes: {} }),
-      })
-      expect(res.status).toBe(200)
-      const setCookie = res.headers.get('Set-Cookie')
-      expect(setCookie).toMatch(/cuid=/)
+      expect(res.status).toBe(404)
+      expect(await storage.get('consent:attacker')).toBeNull()
     })
   })
 
@@ -126,6 +113,34 @@ describe('Sluice server', () => {
       expect(res.status).toBe(204)
     })
 
+    /**
+     * A missing Origin used to pass, on the grounds that non-browser callers
+     * are fine. Every tool that is not a browser omits the header, so the
+     * allowlist stopped browsers and nothing else.
+     */
+    it('rejects a request with no Origin at all once an allowlist is configured', async () => {
+      const app = createApp(storage, {
+        ...DEV_ENV,
+        SLUICE_ALLOWED_ORIGINS: 'https://app.example.com',
+      })
+      const res = await app.request('/ingest/ga4', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'u1' },
+        body: JSON.stringify({}),
+      })
+      expect(res.status).toBe(403)
+    })
+
+    it('allows a request with no Origin while the allowlist is empty (dev mode)', async () => {
+      const app = createApp(storage, DEV_ENV)
+      const res = await app.request('/ingest/ga4', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'u1' },
+        body: JSON.stringify({}),
+      })
+      expect(res.status).toBe(204)
+    })
+
     it('allows any origin when the allowlist is empty (dev mode)', async () => {
       const app = createApp(storage, DEV_ENV)
       const res = await app.request('/ingest/ga4', {
@@ -141,7 +156,7 @@ describe('Sluice server', () => {
   })
 
   describe('/ingest consent enforcement', () => {
-    it('blocks (204) when no consent record exists and buffering is off', async () => {
+    it('blocks (204) when no consent record exists', async () => {
       const app = createApp(storage, DEV_ENV)
       const res = await app.request('/ingest/ga4', {
         method: 'POST',
@@ -151,14 +166,22 @@ describe('Sluice server', () => {
       expect(res.status).toBe(204)
     })
 
-    it('buffers (202) when buffering is enabled and the user has no consent record', async () => {
-      const app = createApp(storage, { ...DEV_ENV, BUFFER_PENDING: 'true' })
+    /**
+     * Buffering stored the full contents of tracking events for users who had
+     * given no consent, then replayed them. There is no lawful basis to hold
+     * that payload, and it is not firewall behaviour.
+     */
+    it('blocks a user with no consent record instead of storing their payload', async () => {
+      const app = createApp(storage, DEV_ENV)
       const res = await app.request('/ingest/ga4', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'pending-user' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ email: 'alice@example.com' }),
       })
-      expect(res.status).toBe(202)
+      expect(res.status).toBe(204)
+
+      const dump = JSON.stringify(await storage.lrange('sluice_buffer:pending-user', 0, -1))
+      expect(dump).not.toContain('alice@example.com')
     })
 
     it('resolves user id from the cuid cookie', async () => {
@@ -200,7 +223,9 @@ describe('Sluice server', () => {
         body: JSON.stringify({
           id: 'testvendor',
           category: 'analytics',
-          endpoints: [],
+          // Declared endpoints are the egress allowlist: a forward may only
+          // address a host this rule names, or its own upstreamUrl.
+          endpoints: ['api.vendor.test'],
           upstreamUrl: SINK,
           transformations: [
             { path: 'email', action: 'strip' },
@@ -425,6 +450,223 @@ describe('Sluice server', () => {
     })
   })
 
+  /**
+   * `?original=` names the URL the browser was heading to, and the proxy used
+   * to forward there without ever checking it against the destination rule. Two
+   * unauthenticated steps on stock configuration reached any host the server
+   * could route to — cloud metadata, internal admin panels — and the audit
+   * recorded it as a clean forward to the vendor. The response never returns to
+   * the caller, so it was a blind exfiltration and scanning primitive.
+   */
+  describe('/ingest egress allowlist', () => {
+    let upstream: ReturnType<typeof vi.fn>
+    let realFetch: typeof globalThis.fetch
+
+    async function seed(app: ReturnType<typeof createApp>) {
+      await app.request('/api/rules/testpixel', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify({
+          id: 'testpixel',
+          category: 'marketing',
+          endpoints: ['pixel.vendor.test'],
+          transformations: [],
+        }),
+      })
+      await app.request('/consent/attacker', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify({ purposes: { marketing: true }, timestamp: Date.now() }),
+      })
+    }
+
+    function pixelTo(app: ReturnType<typeof createApp>, original: string) {
+      return app.request(`/ingest/testpixel?cuid=attacker&original=${encodeURIComponent(original)}`)
+    }
+
+    async function latestAudit(app: ReturnType<typeof createApp>) {
+      const res = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
+      return ((await res.json()) as any[])[0]
+    }
+
+    beforeEach(() => {
+      realFetch = globalThis.fetch
+      upstream = vi.fn(async () => new Response(null, { status: 200 }))
+      globalThis.fetch = upstream as unknown as typeof fetch
+    })
+
+    afterEach(() => {
+      globalThis.fetch = realFetch
+    })
+
+    it('refuses a host the destination rule does not declare', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await pixelTo(app, 'https://sink.attacker.test/pwned?via=default-config')
+      expect(res.status).toBe(204)
+      expect(upstream).not.toHaveBeenCalled()
+
+      const entry = await latestAudit(app)
+      expect(entry.decision).toBe('blocked')
+      expect(entry.reason).toBe('host_not_declared')
+    })
+
+    it('refuses an internal address even before the allowlist is consulted', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await pixelTo(app, 'http://127.0.0.1:4111/pwned')
+      expect(res.status).toBe(204)
+      expect(upstream).not.toHaveBeenCalled()
+      expect((await latestAudit(app)).reason).toBe('host_is_internal_address')
+    })
+
+    it.each([
+      ['the cloud metadata address', 'http://169.254.169.254/latest/meta-data/'],
+      ['a private range', 'http://10.1.2.3/admin'],
+      ['loopback by name', 'http://localhost:8080/admin'],
+      ['an internal hostname', 'http://redis.internal:6379/'],
+      ['IPv6 loopback', 'http://[::1]:9200/_cluster/health'],
+    ])('refuses %s', async (_label, target) => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await pixelTo(app, target)
+      expect(upstream).not.toHaveBeenCalled()
+      expect((await latestAudit(app)).decision).toBe('blocked')
+    })
+
+    it('is not fooled by a declared domain that is only a substring of the host', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await pixelTo(app, 'https://pixel.vendor.test.attacker.test/tr?id=1')
+      expect(upstream).not.toHaveBeenCalled()
+      expect((await latestAudit(app)).reason).toBe('host_not_declared')
+    })
+
+    it('is not fooled by a declared domain in the userinfo of the URL', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await pixelTo(app, 'https://pixel.vendor.test@attacker.test/tr?id=1')
+      expect(upstream).not.toHaveBeenCalled()
+      expect((await latestAudit(app)).reason).toBe('host_not_declared')
+    })
+
+    it('still forwards to a subdomain of a declared endpoint', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await pixelTo(app, 'https://edge.pixel.vendor.test/tr?ev=Purchase')
+      expect(res.status).toBe(204)
+      expect(upstream).toHaveBeenCalledTimes(1)
+      expect((await latestAudit(app)).decision).toBe('forwarded')
+    })
+
+    it('does not follow a redirect the vendor answers with', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await pixelTo(app, 'https://pixel.vendor.test/tr?ev=Purchase')
+      expect((upstream.mock.calls[0][1] as RequestInit).redirect).toBe('manual')
+    })
+  })
+
+  /**
+   * The same counters /api/stats requires a bearer for: which vendors a site
+   * uses, and how much of its traffic is being blocked.
+   */
+  describe('/metrics access', () => {
+    it('refuses an unauthenticated scrape', async () => {
+      const app = createApp(storage, DEV_ENV)
+      const res = await app.request('/metrics?format=prometheus')
+      expect(res.status).toBe(403)
+    })
+
+    it('answers the admin bearer', async () => {
+      const app = createApp(storage, DEV_ENV)
+      const res = await app.request('/metrics', {
+        headers: { Authorization: 'Bearer test-admin' },
+      })
+      expect(res.status).toBe(200)
+    })
+
+    it('answers a scrape token when the operator has configured one', async () => {
+      const app = createApp(storage, { ...DEV_ENV, SLUICE_METRICS_TOKEN: 'scrape-me' })
+      const res = await app.request('/metrics', {
+        headers: { Authorization: 'Bearer scrape-me' },
+      })
+      expect(res.status).toBe(200)
+    })
+
+    it('does not accept a scrape token that was never configured', async () => {
+      const app = createApp(storage, DEV_ENV)
+      const res = await app.request('/metrics', { headers: { Authorization: 'Bearer ' } })
+      expect(res.status).toBe(403)
+    })
+  })
+
+  /**
+   * `/ingest` is public and unauthenticated, and a beacon is a few hundred
+   * bytes. An unbounded read is memory any caller can spend.
+   */
+  describe('/ingest body cap', () => {
+    async function seed(app: ReturnType<typeof createApp>) {
+      await app.request('/consent/big-user', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify({ purposes: { analytics: true }, timestamp: Date.now() }),
+      })
+    }
+
+    it('refuses a body larger than the configured maximum', async () => {
+      const app = createApp(storage, { ...DEV_ENV, SLUICE_MAX_BODY_BYTES: '512' })
+      await seed(app)
+
+      const res = await app.request('/ingest/ga4', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'big-user' },
+        body: JSON.stringify({ pad: 'x'.repeat(2048) }),
+      })
+      expect(res.status).toBe(413)
+
+      const audit = await app.request('/audit', {
+        headers: { Authorization: 'Bearer test-admin' },
+      })
+      expect(((await audit.json()) as any[])[0].reason).toBe('payload_too_large')
+    })
+
+    it('accepts a body inside the maximum', async () => {
+      const app = createApp(storage, { ...DEV_ENV, SLUICE_MAX_BODY_BYTES: '512' })
+      await seed(app)
+
+      const res = await app.request('/ingest/ga4', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'big-user' },
+        body: JSON.stringify({ pad: 'x'.repeat(64) }),
+      })
+      expect(res.status).not.toBe(413)
+    })
+
+    it('refuses an oversized body that understates its Content-Length', async () => {
+      const app = createApp(storage, { ...DEV_ENV, SLUICE_MAX_BODY_BYTES: '512' })
+      await seed(app)
+
+      const res = await app.request('/ingest/ga4', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Consent-UserId': 'big-user',
+          'Content-Length': '10',
+        },
+        body: JSON.stringify({ pad: 'x'.repeat(2048) }),
+      })
+      expect(res.status).toBe(413)
+    })
+  })
+
   describe('CMP webhook', () => {
     it('rejects unauthorized webhooks', async () => {
       const app = createApp(storage, DEV_ENV)
@@ -459,7 +701,7 @@ describe('Sluice server', () => {
     const PIXEL_RULE = {
       id: 'testpixel',
       category: 'marketing',
-      endpoints: [],
+      endpoints: ['pixel.vendor.test'],
       transformations: [],
     }
     let upstream: ReturnType<typeof vi.fn>

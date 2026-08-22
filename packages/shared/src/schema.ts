@@ -88,7 +88,7 @@ export const AuditRecordSchema = z.object({
   timestamp: z.string(),
   userId: z.string(),
   destination: z.string(),
-  decision: z.enum(['forwarded', 'blocked', 'buffered', 'failed']),
+  decision: z.enum(['forwarded', 'blocked', 'failed']),
   reason: z.string(),
   purposesRequired: z.string().optional(),
   purposesGranted: z.array(z.string()).optional(),
