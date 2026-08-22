@@ -84,7 +84,7 @@ program
     const serverPath = path.join(__dirname, '../../server/dist/index.js')
 
     if (!fs.existsSync(serverPath)) {
-      console.error(pc.red('❌ Error: Server not found. Please run "npm run build" first.'))
+      console.error(pc.red('❌ Error: Server not found. Please run "just build" first.'))
       process.exit(1)
     }
 

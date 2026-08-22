@@ -1,2 +1,5 @@
 [tools]
+# Bun is the package manager and script runner; Node still runs the built output.
+bun = "1.4"
+just = "1.58"
 node = "24"

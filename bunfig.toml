@@ -1,0 +1,4 @@
+[install]
+# Vite resolves rolldown at runtime from its own directory, which the isolated
+# linker's store layout breaks. Hoisted matches what the toolchain expects.
+linker = "hoisted"
