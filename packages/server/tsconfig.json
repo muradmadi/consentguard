@@ -5,5 +5,11 @@
     "declaration": true,
     "rootDir": "src"
   },
-  "include": ["src"]
+  "include": ["src"],
+  // patterns.test.ts imports the client's interception table to assert the two
+  // stay in sync. That file is outside this package's rootDir, which tsc
+  // rejects (TS6059), and relaxing rootDir would change the emit layout. The
+  // suite still lints and still runs under vitest; it asserts over two plain
+  // objects, so there is no typechecking worth preserving here.
+  "exclude": ["src/destinations/patterns.test.ts"]
 }

@@ -38,6 +38,10 @@ interface ResolvedConfig extends ClientConfig {
   cookieName: string
 }
 
+/** 1x1 transparent GIF. Assigned instead of a vendor URL when routing fails. */
+const TRANSPARENT_PIXEL =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+
 const DEFAULTS = {
   destinations: INTERCEPTION_PATTERNS,
   observeMutations: true,
@@ -140,6 +144,12 @@ async function setConsent(
 export function init(config?: Partial<ClientConfig>) {
   if (typeof window === 'undefined') return
 
+  // Patching is not idempotent: a second call would wrap our own wrappers, so
+  // every request would be counted and rerouted twice. A page can easily load
+  // the bundle more than once.
+  if (window.__sluiceInitialized) return
+  window.__sluiceInitialized = true
+
   const resolved: ResolvedConfig = { ...DEFAULTS, ...config } as ResolvedConfig
   const activeDestinations = { ...resolved.destinations }
   if (resolved.domains) {
@@ -168,6 +178,24 @@ export function init(config?: Partial<ClientConfig>) {
   let stopRerouting = false
 
   const proxyUrlFor = (dest: string) => `${ingestBase}/${dest}`
+
+  /**
+   * Rewrite a vendor URL to the proxy for transports that cannot carry request
+   * headers — a beacon or an image. Identity and the URL the SDK targeted ride
+   * in the query string instead, which is what /ingest falls back to when the
+   * X-Consent-UserId and X-Original-Url headers are absent.
+   *
+   * Returns null when the URL is not tracking traffic, so callers can pass it
+   * through untouched.
+   */
+  const rewriteTrackingUrl = (url: string): string | null => {
+    const destination = !stopRerouting ? matchDestination(url, activeDestinations) : null
+    if (!destination) return null
+    const proxied = new URL(proxyUrlFor(destination))
+    proxied.searchParams.set('cuid', userId)
+    proxied.searchParams.set('original', url)
+    return proxied.toString()
+  }
 
   // --- fetch ---
   const originalFetch = window.fetch
@@ -275,17 +303,57 @@ export function init(config?: Partial<ClientConfig>) {
     const originalSendBeacon = navigator.sendBeacon.bind(navigator)
     navigator.sendBeacon = function (url: string | URL, data?: BodyInit | null) {
       const urlStr = url.toString()
-      const destination = !stopRerouting ? matchDestination(urlStr, activeDestinations) : null
-      if (!destination) return originalSendBeacon(url, data)
       try {
-        const finalUrl = new URL(proxyUrlFor(destination))
-        finalUrl.searchParams.set('cuid', userId)
-        finalUrl.searchParams.set('original', urlStr)
-        return originalSendBeacon(finalUrl.toString(), data)
+        const proxied = rewriteTrackingUrl(urlStr)
+        if (!proxied) return originalSendBeacon(url, data)
+        return originalSendBeacon(proxied, data)
       } catch (err) {
         console.error('[Sluice] Beacon routing error:', err)
         return resolved.dangerouslyAllowOnError ? originalSendBeacon(url, data) : true
       }
+    }
+  }
+
+  // --- <img> pixels ---
+  // The Meta pixel and much of ad-tech send events by assigning an image's src.
+  // None of fetch, XHR or sendBeacon sees those, so without this the request
+  // walks straight past the firewall. Both ways a src can be set are covered.
+  //
+  // Two limits remain. An <img> already present in the initial HTML has its src
+  // set by the parser and never reaches this setter — the same root cause as a
+  // tracker that captures window.fetch before this bundle runs. And srcset is
+  // not covered; nothing uses it as a beacon transport.
+  if (typeof HTMLImageElement !== 'undefined') {
+    const rewriteSrc = (value: string): string => {
+      try {
+        return rewriteTrackingUrl(value) ?? value
+      } catch (err) {
+        console.error('[Sluice] Image routing error:', err)
+        // Fail closed: a transparent pixel issues no request at all, where an
+        // empty src would re-request the current page.
+        return resolved.dangerouslyAllowOnError ? value : TRANSPARENT_PIXEL
+      }
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+    if (descriptor?.set) {
+      const originalSrcSetter = descriptor.set
+      Object.defineProperty(HTMLImageElement.prototype, 'src', {
+        ...descriptor,
+        set(value: string) {
+          originalSrcSetter.call(this, rewriteSrc(String(value)))
+        },
+      })
+    }
+
+    // setAttribute lives on Element.prototype; assigning here shadows it for
+    // images only, leaving every other element's attributes alone.
+    const originalSetAttribute = HTMLImageElement.prototype.setAttribute
+    HTMLImageElement.prototype.setAttribute = function (name: string, value: string) {
+      if (name.toLowerCase() === 'src') {
+        return originalSetAttribute.call(this, name, rewriteSrc(String(value)))
+      }
+      return originalSetAttribute.call(this, name, value)
     }
   }
 }
@@ -340,6 +408,8 @@ declare global {
       ) => Promise<{ ok: boolean; replayed?: number; error?: string }>
     }
     __sluiceConfig?: Partial<ClientConfig>
+    /** Set by init() so a second load cannot wrap the patches a second time. */
+    __sluiceInitialized?: boolean
   }
 }
 

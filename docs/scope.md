@@ -116,13 +116,40 @@ Still open, and out of this commit: the buffer stores `originalUrl` with its que
 intact, so personal data sits in storage for a user with no consent record. Deleting
 buffering (see **Remove**) resolves it.
 
-### 4. Close the interception holes
+### 4. Close the interception holes — **done, except identity**
 
-- Intercept `<img>` requests — `Image.prototype.src` and `setAttribute('src', …)` on
-  `HTMLImageElement`. Without this the Meta pixel is entirely uncovered.
-- Make `init()` idempotent so a double load cannot double-wrap `fetch`.
-- Stop minting a persistent `cuid` cookie before consent exists. Use a session-scoped
-  identifier that is promoted to a persistent one only on a consent grant.
+Items 1–3 all improved what happens to a request once it arrives. None of that reaches
+a request that never arrives, and the pixel transport never did.
+
+`<img>` requests are now intercepted: the interceptor wraps the
+`HTMLImageElement.prototype.src` setter and `setAttribute`, and routes through the same
+`rewriteTrackingUrl` helper as `sendBeacon`, since neither transport can carry a header.
+`init()` is idempotent, guarded on `window.__sluiceInitialized`.
+
+Interception alone would not have been enough. Three things were found in the process:
+
+- **The server dropped pixels anyway.** `buildForward` required a parseable JSON body,
+  and a pixel has no body — its whole payload is the query string. A Meta-shaped pixel
+  audited as `blocked / unscrubbable_payload` with the upstream never called, so the
+  firewall could neither see the request nor serve it. It now forwards a bodyless
+  request with an original URL as a `GET`, where `scrubUrl` — built in item 3 — is a
+  complete scrub rather than half of one.
+- **The client's pattern table had drifted from the registry.** It intercepted
+  `facebook.net` (the script CDN) but not `facebook.com/tr` (the beacon the rule itself
+  declares), missed `analytics.google.com`, and named a `segment` destination the
+  registry has never had, which `/ingest` answers with a `400`. Fixed, and now asserted
+  by `server/src/destinations/patterns.test.ts` rather than left to convention.
+- **The query string was going to stdout.** Hono's `logger()` slices the path off the
+  raw URL, keeping the query, so `?original=…&em=alice@example.com` was logged verbatim
+  — including for requests that were blocked. Replaced with a logger that prints the
+  pathname. Folded in here rather than split out, because intercepting more pixels would
+  have made it strictly worse.
+
+Still open, and deliberately separated: **stop minting a persistent `cuid` cookie before
+consent exists**. `getOrSetUserId` writes a 365-day cookie and a `localStorage` entry on
+page load. It needs a session-scoped identifier promoted to a persistent one only on a
+consent grant, which touches the server's identity resolution and the consent gate — an
+identity change, not an interception one.
 
 ### 5. Make the registry honest
 

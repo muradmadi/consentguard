@@ -74,6 +74,9 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
    produce audit entries, and a scan entry carries the `detector` that found it.
    `buildForward` then puts the resulting URL through `scrubUrl`, so the query string
    is scrubbed by the same two passes as the body. Its audit entries are prefixed `?`.
+   A bodyless request with an original URL is a pixel: its whole payload is the query
+   string, so it forwards as a `GET` to that URL and `scrubUrl` alone is a complete
+   scrub. `unscrubbable_payload` therefore means a body that exists and will not parse.
 7. **Forward upstream**, then audit + metrics. Success → `204`, upstream failure → `502`.
    The audit is written after the upstream call resolves, so `decision` states what
    happened rather than what was intended.
@@ -102,7 +105,11 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
 - **Vendor adapters** — `destinations/adapters/<vendor>.ts`, registered in `adapters/index.ts`.
   Only needed when the vendor's server-side API differs in shape from what the browser sent.
 - **Interception patterns** — `packages/client/src/patterns.ts` maps a domain substring to a
-  destination id. This must stay in sync with the server registry.
+  destination id. It must stay in sync with the server registry, and
+  `server/src/destinations/patterns.test.ts` enforces both halves: no pattern may name a
+  destination the registry lacks, and no rule endpoint may go unmatched. That suite is
+  excluded from the server's `typecheck` — it imports across a package boundary, which
+  `rootDir` rejects.
 - **Storage** — `engine/storage/` provides memory, redis, and cloudflare-kv behind one
   `StorageProvider` interface, with `hybrid.ts` as an in-process cache wrapper.
 
@@ -171,9 +178,10 @@ Run `just check` and report its real output. Never claim a change works without 
 
 Real, verified, and unfixed. Do not re-diagnose these from scratch:
 
-- **`<img>` pixels are not intercepted.** `packages/client/src/index.ts` patches `fetch`,
-  `XMLHttpRequest`, and `sendBeacon` only. `new Image().src = ...` is the primary
-  transport for the Meta pixel and much of ad-tech, and it walks straight past.
+- **An `<img>` in the initial HTML is not intercepted.** The interceptor patches the
+  `HTMLImageElement.prototype.src` setter and `setAttribute`, which covers every pixel
+  built in script. A pixel already in the served markup has its `src` set by the parser
+  and never reaches either. `srcset` is not covered at all.
 - **Load-order fragility.** A tracker that captures `window.fetch` before the Sluice
   bundle executes keeps the unpatched reference. Scripts above the Sluice tag in the
   initial HTML are never neutralized.
@@ -187,4 +195,3 @@ Real, verified, and unfixed. Do not re-diagnose these from scratch:
 - **`getDefaultRule` returns `category: 'necessary'`**, which `hasConsent` always
   grants. Reachable when a malformed rule override exists for an id the registry does
   not know. Fail-open in a fail-closed system.
-- **`init()` is not idempotent.** Calling it twice double-wraps `fetch`.

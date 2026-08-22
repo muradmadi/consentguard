@@ -13,10 +13,17 @@ let pristineFetch: typeof window.fetch
 let pristineOpen: typeof XMLHttpRequest.prototype.open
 let pristineSend: typeof XMLHttpRequest.prototype.send
 let pristineBeacon: unknown
+let pristineImageSrc: PropertyDescriptor | undefined
+let pristineSetAttribute: typeof HTMLImageElement.prototype.setAttribute
 
-/** Boot the interceptor with the given config, as the real bundle does. */
+/**
+ * Boot the interceptor with the given config, as the real bundle does on a
+ * fresh page load. init() refuses to patch twice in one window, so the guard is
+ * cleared here: a new page load is precisely the case it is not meant to block.
+ */
 async function loadClient(config: Record<string, unknown> = {}) {
   ;(window as any).__sluiceConfig = { proxyPath: '/analytics', ...config }
+  delete (window as any).__sluiceInitialized
   vi.resetModules()
   await import('./index')
 }
@@ -26,12 +33,16 @@ beforeEach(() => {
   pristineOpen = XMLHttpRequest.prototype.open
   pristineSend = XMLHttpRequest.prototype.send
   pristineBeacon = (navigator as any).sendBeacon
+  pristineImageSrc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+  pristineSetAttribute = HTMLImageElement.prototype.setAttribute
 
   document.head.innerHTML = ''
   document.cookie = 'cuid=; Max-Age=0; path=/'
   localStorage.clear()
   delete (window as any).Sluice
   delete (window as any).__sluiceConfig
+  // init() is idempotent per window, and jsdom's window outlives resetModules.
+  delete (window as any).__sluiceInitialized
 
   // jsdom implements neither fetch nor sendBeacon; the interceptor wraps whatever it finds.
   window.fetch = vi.fn(async () => new Response(null, { status: 204 })) as unknown as typeof fetch
@@ -51,6 +62,8 @@ afterEach(() => {
     configurable: true,
     writable: true,
   })
+  if (pristineImageSrc) Object.defineProperty(HTMLImageElement.prototype, 'src', pristineImageSrc)
+  HTMLImageElement.prototype.setAttribute = pristineSetAttribute
 })
 
 describe('public API', () => {
@@ -248,5 +261,58 @@ describe('script neutralisation', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(script.getAttribute('data-sluice-blocked')).toBeNull()
+  })
+})
+
+describe('<img> pixel interception', () => {
+  const PIXEL = 'https://www.facebook.com/tr/?id=1&ev=Purchase&ud%5Bem%5D=alice%40example.com'
+
+  it('reroutes a tracking image with cuid and original url', async () => {
+    await loadClient()
+    const img = new Image()
+    img.src = PIXEL
+
+    const sent = new URL(img.src)
+    expect(sent.pathname).toBe('/analytics/ingest/facebook_pixel')
+    expect(sent.searchParams.get('cuid')).toBe((window as any).Sluice.userId)
+    expect(sent.searchParams.get('original')).toBe(PIXEL)
+  })
+
+  it('leaves a non-tracking image untouched', async () => {
+    await loadClient()
+    const img = new Image()
+    img.src = NEUTRAL
+    expect(img.src).toBe(NEUTRAL)
+  })
+
+  it('routes setAttribute("src") the same way as the property', async () => {
+    await loadClient()
+    const img = document.createElement('img')
+    img.setAttribute('src', PIXEL)
+
+    const sent = new URL(img.getAttribute('src')!)
+    expect(sent.pathname).toBe('/analytics/ingest/facebook_pixel')
+    expect(sent.searchParams.get('original')).toBe(PIXEL)
+  })
+
+  it('leaves attributes other than src alone', async () => {
+    await loadClient()
+    const img = document.createElement('img')
+    img.setAttribute('alt', PIXEL)
+    expect(img.getAttribute('alt')).toBe(PIXEL)
+  })
+})
+
+describe('idempotency', () => {
+  it('does not wrap the patches a second time', async () => {
+    await loadClient()
+    const patchedFetch = window.fetch
+    const patchedOpen = XMLHttpRequest.prototype.open
+
+    const mod = await import('./index')
+    mod.init({ proxyPath: '/analytics' })
+
+    expect(window.fetch).toBe(patchedFetch)
+    expect(XMLHttpRequest.prototype.open).toBe(patchedOpen)
   })
 })

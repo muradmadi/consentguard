@@ -1,6 +1,5 @@
 import { Hono, Context } from 'hono'
 import { cors } from 'hono/cors'
-import { logger } from 'hono/logger'
 import { getCookie, setCookie } from 'hono/cookie'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { ConsentStateSchema } from '@sluice/shared'
@@ -32,7 +31,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
   const bufferManager = new BufferManager(effectiveStorage)
   const ruleManager = new RuleManager(effectiveStorage)
 
-  app.use('*', logger())
+  app.use('*', requestLogger)
   app.route('/webhooks', createWebhookRouter(storage, config))
 
   // Static assets (dashboard + client bundle) resolved relative to the CWD.
@@ -354,6 +353,22 @@ export function createApp(storage: StorageProvider, env: any = {}) {
 // ---------- helpers ----------
 
 /**
+ * Request logging, path only.
+ *
+ * Hono's own `logger()` derives its path by slicing the raw URL, which keeps
+ * the query string. A beacon puts personal data there — `?original=` carries
+ * the vendor URL the browser targeted, email and all — so every intercepted
+ * request wrote the values to stdout, including ones that were blocked. The
+ * audit deliberately never records a removed value; neither does this.
+ */
+async function requestLogger(c: Context, next: () => Promise<void>): Promise<void> {
+  const start = Date.now()
+  await next()
+  const { pathname } = new URL(c.req.url)
+  console.log(`${c.req.method} ${pathname} ${c.res.status} ${Date.now() - start}ms`)
+}
+
+/**
  * Turn an intercepted request into the concrete upstream call, scrubbed.
  *
  * Both the live ingest path and the buffer replay go through here, so the
@@ -370,6 +385,27 @@ async function buildForward(ctx: VendorContext): Promise<BuildOutcome> {
     if (!result) return { ok: false, reason: 'adapter_returned_null' }
     if ('skip' in result) return { ok: false, reason: `adapter_skip:${result.reason}` }
     return { ok: true, forward: withScrubbedUrl(result, ctx) }
+  }
+
+  // A pixel — an <img> beacon — carries its whole payload in the query string
+  // and has no body at all. `withScrubbedUrl` covers the query, so scrubbing
+  // the only half that exists is a complete scrub rather than a partial one.
+  // Without an original URL there is nothing to forward, so it falls through
+  // and is refused below.
+  if (!ctx.rawBody && ctx.originalUrl) {
+    return {
+      ok: true,
+      forward: withScrubbedUrl(
+        {
+          url: ctx.originalUrl,
+          method: 'GET',
+          headers: { 'User-Agent': ctx.headers['user-agent'] || 'Sluice Proxy' },
+          body: '',
+          report: [],
+        },
+        ctx,
+      ),
+    }
   }
 
   // No adapter → generic JSON passthrough. Only useful for testing; a real

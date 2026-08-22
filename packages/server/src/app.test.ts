@@ -454,4 +454,109 @@ describe('Sluice server', () => {
       expect(data.userId).toBe('webhook-user')
     })
   })
+
+  describe('/ingest pixel transport', () => {
+    const PIXEL_RULE = {
+      id: 'testpixel',
+      category: 'marketing',
+      endpoints: [],
+      transformations: [],
+    }
+    let upstream: ReturnType<typeof vi.fn>
+    let realFetch: typeof globalThis.fetch
+
+    async function seed(app: ReturnType<typeof createApp>) {
+      await app.request('/api/rules/testpixel', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify(PIXEL_RULE),
+      })
+      await app.request('/consent/pixel-user', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify({ purposes: { marketing: true }, timestamp: Date.now() }),
+      })
+    }
+
+    async function latestAudit(app: ReturnType<typeof createApp>) {
+      const res = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
+      return ((await res.json()) as any[])[0]
+    }
+
+    beforeEach(() => {
+      realFetch = globalThis.fetch
+      upstream = vi.fn(async () => new Response(null, { status: 200 }))
+      globalThis.fetch = upstream as unknown as typeof fetch
+    })
+
+    afterEach(() => {
+      globalThis.fetch = realFetch
+    })
+
+    /**
+     * An <img> beacon is a GET with no body: the whole payload is the query
+     * string. Before the pixel branch existed this was refused as an
+     * unscrubbable payload, so the vendor never received the event at all.
+     */
+    it('forwards a bodyless pixel, scrubbed, instead of refusing it', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const original =
+        'https://pixel.vendor.test/tr?id=42&ev=Purchase&em=alice@example.com&ip=203.0.113.9'
+      const res = await app.request(
+        `/ingest/testpixel?cuid=pixel-user&original=${encodeURIComponent(original)}`,
+      )
+      expect(res.status).toBe(204)
+
+      expect(upstream).toHaveBeenCalledTimes(1)
+      const sent = new URL(String(upstream.mock.calls[0][0]))
+      expect(sent.searchParams.get('em')).toMatch(/^[0-9a-f]{64}$/)
+      expect(sent.searchParams.has('ip')).toBe(false)
+      expect(sent.searchParams.get('ev')).toBe('Purchase')
+      expect(sent.searchParams.get('id')).toBe('42')
+      expect((upstream.mock.calls[0][1] as RequestInit).method).toBe('GET')
+
+      const entry = await latestAudit(app)
+      expect(entry.decision).toBe('forwarded')
+      expect(entry.transformations).toEqual([
+        { path: '?em', action: 'hash', matched: 1, detector: 'email' },
+        { path: '?ip', action: 'strip', matched: 1, detector: 'ipv4' },
+      ])
+    })
+
+    it('refuses a bodyless request with no url to forward to', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await app.request('/ingest/testpixel?cuid=pixel-user')
+      expect(res.status).toBe(204)
+      expect(upstream).not.toHaveBeenCalled()
+
+      const entry = await latestAudit(app)
+      expect(entry.decision).toBe('blocked')
+    })
+
+    it('keeps the query string out of the request log', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+      const logged: string[] = []
+      const spy = vi.spyOn(console, 'log').mockImplementation((...args) => {
+        logged.push(args.join(' '))
+      })
+
+      const original = 'https://pixel.vendor.test/tr?em=alice@example.com'
+      await app.request(
+        `/ingest/testpixel?cuid=pixel-user&original=${encodeURIComponent(original)}`,
+      )
+      spy.mockRestore()
+
+      const line = logged.join('\n')
+      expect(line).toContain('/ingest/testpixel')
+      // The value arrives percent-encoded, so decode before looking for it —
+      // `alice%40example.com` in a log file is just as much of a leak.
+      expect(decodeURIComponent(line)).not.toContain('alice@example.com')
+      expect(line).not.toContain('original=')
+    })
+  })
 })
