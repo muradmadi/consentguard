@@ -1,6 +1,7 @@
 {
   "name": "sluice-monorepo",
   "private": true,
+  "type": "module",
   "workspaces": [
     "packages/*"
   ],
@@ -16,11 +17,16 @@
     "test": "npx turbo run test"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.0",
-    "eslint": "^8.57.0",
+    "eslint": "^10.9.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.4",
+    "globals": "^17.11.0",
     "prettier": "^3.2.5",
     "turbo": "^1.13.0",
     "typescript": "^5.4.5",
+    "typescript-eslint": "^8.67.0",
     "vitest": "^1.4.0"
   }
 }
