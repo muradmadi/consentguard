@@ -96,3 +96,89 @@ export const AuditRecordSchema = z.object({
 })
 
 export type AuditRecord = z.infer<typeof AuditRecordSchema>
+
+/**
+ * Sealed Audit Record Schema
+ * An audit record as it is written to the durable sink: the record plus its
+ * position in the hash chain. `hash` is the digest of the record with `hash`
+ * itself removed; `prevHash` is the digest of the record before it, so deleting
+ * or editing an entry breaks the link and is detectable. A sealed record is a
+ * superset of an `AuditRecord`, so anything reading the plain shape still works.
+ */
+export const SealedAuditRecordSchema = AuditRecordSchema.extend({
+  seq: z.number().int().nonnegative(),
+  prevHash: z.string().regex(/^[0-9a-f]{64}$/),
+  hash: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+export type SealedAuditRecord = z.infer<typeof SealedAuditRecordSchema>
+
+/**
+ * The state of the hash chain over the records the sink still holds.
+ *
+ * `truncated` is distinct from `broken` on purpose: retention deletes old
+ * segments, which is a legitimate way for the chain to stop short of its
+ * genesis. It is only `broken` when a record that should be there is missing,
+ * altered, or out of order.
+ */
+export const ChainStatusSchema = z.object({
+  status: z.enum(['intact', 'truncated', 'broken', 'unverified', 'unavailable']),
+  checked: z.number().int().nonnegative(),
+  head: z.object({ seq: z.number().int().nonnegative(), hash: z.string() }).nullable(),
+  brokenAt: z.number().int().nonnegative().optional(),
+  reason: z.string().optional(),
+})
+
+export type ChainStatus = z.infer<typeof ChainStatusSchema>
+
+/**
+ * One page of audit records, newest first. `nextCursor` is the `seq` to resume
+ * below; `null` means the query reached the end of what the sink holds.
+ * `scanned` is how many records were read to fill the page, so a filter that
+ * matches nothing is distinguishable from a sink that holds nothing.
+ */
+export const AuditPageSchema = z.object({
+  records: z.array(SealedAuditRecordSchema),
+  nextCursor: z.number().int().nonnegative().nullable(),
+  scanned: z.number().int().nonnegative(),
+})
+
+export type AuditPage = z.infer<typeof AuditPageSchema>
+
+/**
+ * Rule Health
+ * Which of a destination's declared transformations have actually fired over
+ * the retained window. `matched: 0` is a dead rule — a path that cannot exist
+ * in the payloads that destination really sends. Derived from the audit, never
+ * from the rule; `detected` reports what the value scan caught alongside it,
+ * which is the same evidence read the other way round.
+ */
+export const RuleHealthSchema = z.object({
+  destination: z.string(),
+  declared: z.array(
+    z.object({
+      path: z.string(),
+      action: TransformationActionSchema,
+      matched: z.number().int().nonnegative(),
+      lastFiredAt: z.string().nullable(),
+    }),
+  ),
+  detected: z.array(
+    z.object({
+      detector: PiiDetectorSchema,
+      matched: z.number().int().nonnegative(),
+    }),
+  ),
+})
+
+export type RuleHealth = z.infer<typeof RuleHealthSchema>
+
+export const RuleHealthReportSchema = z.object({
+  destinations: z.array(RuleHealthSchema),
+  recordsScanned: z.number().int().nonnegative(),
+  scanLimit: z.number().int().positive(),
+  /** True when the scan hit its ceiling, so the counts are a floor, not a total. */
+  truncated: z.boolean(),
+})
+
+export type RuleHealthReport = z.infer<typeof RuleHealthReportSchema>

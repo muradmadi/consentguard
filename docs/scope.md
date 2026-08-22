@@ -64,11 +64,11 @@ actually changed. `AuditRecordSchema` lives in `@sluice/shared`; `decision` is
 buffer replay forwarded raw string payloads unscrubbed, and `sluice logs` compared an ISO
 timestamp against `0` so it never printed a line.
 
-Still open, and worth doing next time the rules are touched: a **rule-health view**. The
-report knows which declared transformations never match, which would surface dead rules
-like `mixpanel.ts`'s `properties.$email` — a path that cannot exist because that
-destination has no adapter. The audit deliberately does not store unmatched entries, so
-this needs its own surface.
+Carried out in item 7: a **rule-health view**. The report knows which declared
+transformations never match, which surfaces dead rules like `mixpanel.ts`'s
+`properties.$email` — a path that cannot exist because that destination has no adapter.
+The audit deliberately does not store unmatched entries, so it got its own surface,
+derived from the retained record rather than kept as a counter.
 
 ### 2. Detect personal data that was not declared — **done**
 
@@ -211,6 +211,65 @@ Note that until then those five destinations forward nowhere: the passthrough no
 satisfy the egress allowlist, and `facebook.ts`'s `<PIXEL_ID>` upstream still cannot
 work. The registry lists them; the firewall refuses them. That is the honest failure
 mode, not a substitute for fixing it.
+
+### 7. Make the evidence outlive the request — **done**
+
+Items 1–6 all improved what the record _says_. None of it survived the afternoon.
+
+`AuditLogger` pushed onto a Redis list and called `ltrim(KEY, 0, 999)` on every write.
+No archive behind it, no warning when entries rolled off the end, no retention policy,
+no export, and no integrity: anyone with Redis access — or, before item 5, anyone at all
+via `/api/debug/reset` — could delete or alter history without leaving a trace. `/audit`
+returned the newest hundred with no time range, no filters and no pagination. Half the
+sentence this repo is judged against is "and there is a per-request record proving it",
+and on a site doing modest traffic this morning's proof was gone by lunchtime.
+
+The record is now a file. `engine/audit/sink/file.ts` appends NDJSON to one UTC-day
+segment per file, on by default at `./.sluice/audit`; the Redis list is demoted to a
+display cache sized by `SLUICE_AUDIT_CACHE_ENTRIES`. Retention is
+`SLUICE_AUDIT_RETENTION_DAYS` (90) rather than a constant, applied on the day boundary
+and again on startup so a process that never sees one still enforces it.
+
+Each record carries `seq`, `prevHash` and its own `hash`, so an edit, a deletion or a
+reorder breaks the chain and `/audit/verify` says which sequence number it broke at.
+Retention deleting a segment is not tampering, so a prune writes a `{ seq, hash }` anchor
+to `manifest.json` and a legitimately shortened chain reports `truncated`, not `broken`.
+The limit is stated rather than papered over: this catches anyone with write access to
+the records, not someone who re-chains the whole directory including the anchor. That
+needs the head hash held off-box, which `/api/health` publishes for the purpose.
+
+`/audit` takes `from`, `to`, `destination`, `decision`, `detector`, `userId`, `limit` and
+`cursor`, and `format=csv|ndjson` returns the same page as a file with the hashes
+attached, so an export can be re-verified instead of taken on trust. A filter it cannot
+honour is a `400` rather than a silently unfiltered page — an operator producing evidence
+needs to know that `decision=forwaded` narrowed nothing. `sluice verify` and
+`sluice export` do the same from the terminal, the former exiting non-zero so it can run
+from cron.
+
+Three things were found alongside it:
+
+- **The dashboard asserted health it had never measured.** `App.tsx` rendered "System
+  Healthy" and "Redis: Connected" as literal strings whatever the proxy was doing, and
+  computed a Coverage percentage as `rules.length / 50` — a denominator corresponding to
+  nothing. `/health` was no better: it answered `ok` unconditionally. There is now a real
+  storage round trip behind both, `/api/health` reports what the sink actually holds and
+  how far back, and the Coverage tile is gone rather than replaced. In a product whose
+  value is that its reporting is derived, an operator surface that asserts is the same
+  defect as an audit built from a rule's declarations.
+- **Fail-closed did not cover the evidence.** Storage, parse and consent failures all
+  resolved to not forwarding, but a sink that could not write did not. It does now:
+  `evidenceAvailable()` is checked before the forward, and the check initialises the sink
+  rather than waiting for a write to fail, so the very first request through a broken
+  configuration is refused rather than the second. `SLUICE_AUDIT_REQUIRED=false` reverts
+  it; no sink configured is a choice and never blocks.
+- **`/api/debug/reset` deleted the evidence.** It now clears the display cache and
+  metrics and leaves the sink alone. A record whoever holds the admin token can delete
+  proves nothing about what happened.
+
+Still open: `/api/rule-health` joins the audit against `RuleManager.getAllRules()`, which
+only iterates `REGISTRY_KEYS`, so an override for an id the registry does not know gets
+no health row — `StorageProvider` cannot enumerate keys. And a query reads one day's
+segment whole, which is fine at the traffic this is built for and not at ten times it.
 
 ## Non-goals
 

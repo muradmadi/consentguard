@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { createApp } from './app'
 import { MemoryStorageProvider } from './engine/storage'
+import { FileAuditSink } from './engine/audit/sink/file'
 
 const DEV_ENV = {
   NODE_ENV: 'test',
@@ -250,7 +254,7 @@ describe('Sluice server', () => {
 
     async function latestAudit(app: ReturnType<typeof createApp>) {
       const res = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
-      return ((await res.json()) as any[])[0]
+      return ((await res.json()) as any).records[0]
     }
 
     beforeEach(() => {
@@ -486,7 +490,7 @@ describe('Sluice server', () => {
 
     async function latestAudit(app: ReturnType<typeof createApp>) {
       const res = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
-      return ((await res.json()) as any[])[0]
+      return ((await res.json()) as any).records[0]
     }
 
     beforeEach(() => {
@@ -635,7 +639,7 @@ describe('Sluice server', () => {
       const audit = await app.request('/audit', {
         headers: { Authorization: 'Bearer test-admin' },
       })
-      expect(((await audit.json()) as any[])[0].reason).toBe('payload_too_large')
+      expect(((await audit.json()) as any).records[0].reason).toBe('payload_too_large')
     })
 
     it('accepts a body inside the maximum', async () => {
@@ -722,7 +726,7 @@ describe('Sluice server', () => {
 
     async function latestAudit(app: ReturnType<typeof createApp>) {
       const res = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
-      return ((await res.json()) as any[])[0]
+      return ((await res.json()) as any).records[0]
     }
 
     beforeEach(() => {
@@ -799,6 +803,286 @@ describe('Sluice server', () => {
       // `alice%40example.com` in a log file is just as much of a leak.
       expect(decodeURIComponent(line)).not.toContain('alice@example.com')
       expect(line).not.toContain('original=')
+    })
+  })
+  /**
+   * The record is half the claim: nothing leaves carrying personal data, *and*
+   * there is a per-request record proving it. These cover the half that has to
+   * still be there next quarter — durable, queryable, exportable, and provably
+   * unedited.
+   */
+  describe('durable audit record', () => {
+    const SINK = 'https://sink.example.com/collect'
+    let dir: string
+    let auditSink: FileAuditSink
+    let upstream: ReturnType<typeof vi.fn>
+    let realFetch: typeof globalThis.fetch
+
+    function app(env: Record<string, string> = {}) {
+      return createApp(storage, { ...DEV_ENV, ...env }, { auditSink })
+    }
+
+    async function seed(instance: ReturnType<typeof createApp>) {
+      await instance.request('/api/rules/mixpanel', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify({
+          id: 'mixpanel',
+          category: 'analytics',
+          endpoints: ['sink.example.com'],
+          upstreamUrl: SINK,
+          transformations: [
+            { path: 'email', action: 'strip' },
+            { path: 'never_sent', action: 'strip' },
+          ],
+        }),
+      })
+      await instance.request('/consent/clean-user', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify({ purposes: { analytics: true }, timestamp: Date.now() }),
+      })
+    }
+
+    function send(instance: ReturnType<typeof createApp>, payload: unknown) {
+      return instance.request('/ingest/mixpanel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'clean-user' },
+        body: JSON.stringify(payload),
+      })
+    }
+
+    async function get(instance: ReturnType<typeof createApp>, path: string) {
+      return instance.request(path, { headers: { Authorization: 'Bearer test-admin' } })
+    }
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'sluice-app-audit-'))
+      auditSink = new FileAuditSink({ dir, retentionDays: 90 })
+      realFetch = globalThis.fetch
+      upstream = vi.fn(async () => new Response(null, { status: 200 }))
+      globalThis.fetch = upstream as unknown as typeof fetch
+    })
+
+    afterEach(async () => {
+      globalThis.fetch = realFetch
+      await rm(dir, { recursive: true, force: true })
+    })
+
+    it('writes every decision to disk, not only to the cache', async () => {
+      const instance = app()
+      await seed(instance)
+      await send(instance, { email: 'alice@example.com' })
+
+      const [file] = (await readdir(dir)).filter((f) => f.endsWith('.ndjson'))
+      const lines = (await readFile(join(dir, file), 'utf8')).trim().split('\n')
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0])).toMatchObject({ destination: 'mixpanel', seq: 0 })
+    })
+
+    it('survives the process that wrote it', async () => {
+      const first = app()
+      await seed(first)
+      await send(first, { email: 'alice@example.com' })
+
+      // A second app over the same directory: new process, same evidence.
+      auditSink = new FileAuditSink({ dir, retentionDays: 90 })
+      const restarted = app()
+      const page = (await (await get(restarted, '/audit')).json()) as any
+      expect(page.records).toHaveLength(1)
+    })
+
+    it('filters by destination, decision and detector', async () => {
+      const instance = app()
+      await seed(instance)
+      await send(instance, { email: 'alice@example.com' })
+      await send(instance, { contact: 'bob@example.com' })
+      await instance.request('/ingest/mixpanel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'no-consent-user' },
+        body: JSON.stringify({}),
+      })
+
+      const forwarded = (await (await get(instance, '/audit?decision=forwarded')).json()) as any
+      expect(forwarded.records).toHaveLength(2)
+
+      const blocked = (await (await get(instance, '/audit?decision=blocked')).json()) as any
+      expect(blocked.records.map((r: any) => r.reason)).toEqual(['consent_missing'])
+
+      // `contact` is not a declared path; the value scan is what caught it.
+      const detected = (await (await get(instance, '/audit?detector=email')).json()) as any
+      expect(detected.records).toHaveLength(1)
+      expect(detected.records[0].transformations[0].path).toBe('contact')
+
+      const elsewhere = (await (await get(instance, '/audit?destination=ga4')).json()) as any
+      expect(elsewhere.records).toEqual([])
+    })
+
+    it('refuses a filter it cannot honour rather than silently ignoring it', async () => {
+      const instance = app()
+      expect((await get(instance, '/audit?decision=forwaded')).status).toBe(400)
+      expect((await get(instance, '/audit?detector=eyecolour')).status).toBe(400)
+      expect((await get(instance, '/audit?from=yesterday')).status).toBe(400)
+      expect((await get(instance, '/audit?limit=0')).status).toBe(400)
+    })
+
+    it('pages newest first', async () => {
+      const instance = app()
+      await seed(instance)
+      for (let i = 0; i < 3; i++) await send(instance, { n: i })
+
+      const first = (await (await get(instance, '/audit?limit=2')).json()) as any
+      expect(first.records.map((r: any) => r.seq)).toEqual([2, 1])
+
+      const next = (await (
+        await get(instance, `/audit?limit=2&cursor=${first.nextCursor}`)
+      ).json()) as any
+      expect(next.records.map((r: any) => r.seq)).toEqual([0])
+      expect(next.nextCursor).toBeNull()
+    })
+
+    it('exports the record as CSV and NDJSON, hashes included', async () => {
+      const instance = app()
+      await seed(instance)
+      await send(instance, { email: 'alice@example.com' })
+
+      const csv = await get(instance, '/audit?format=csv')
+      expect(csv.headers.get('Content-Type')).toContain('text/csv')
+      expect(csv.headers.get('Content-Disposition')).toContain('sluice-audit.csv')
+      const rows = (await csv.text()).trim().split('\n')
+      expect(rows[0]).toBe(
+        'seq,timestamp,userId,destination,decision,reason,purposesRequired,purposesGranted,transformations,prevHash,hash',
+      )
+      expect(rows[1]).toContain('mixpanel')
+      expect(rows[1]).not.toContain('alice@example.com')
+
+      const ndjson = await get(instance, '/audit?format=ndjson')
+      expect(ndjson.headers.get('Content-Type')).toContain('application/x-ndjson')
+      expect(JSON.parse((await ndjson.text()).trim())).toMatchObject({ seq: 0 })
+    })
+
+    it('verifies the chain, and stops verifying once a record is edited', async () => {
+      const instance = app()
+      await seed(instance)
+      await send(instance, { email: 'alice@example.com' })
+      await send(instance, { email: 'bob@example.com' })
+
+      expect(await (await get(instance, '/audit/verify')).json()).toMatchObject({
+        status: 'intact',
+        checked: 2,
+      })
+
+      const [file] = (await readdir(dir)).filter((f) => f.endsWith('.ndjson'))
+      const path = join(dir, file)
+      const edited = (await readFile(path, 'utf8')).replace(
+        '"decision":"forwarded"',
+        '"decision":"blocked"',
+      )
+      await writeFile(path, edited)
+
+      auditSink = new FileAuditSink({ dir, retentionDays: 90 })
+      const result = (await (await get(app(), '/audit/verify')).json()) as any
+      expect(result.status).toBe('broken')
+      expect(result.brokenAt).toBe(0)
+    })
+
+    it('reports health it has actually measured', async () => {
+      const instance = app()
+      await seed(instance)
+      await send(instance, { email: 'alice@example.com' })
+
+      const health = (await (await get(instance, '/api/health')).json()) as any
+      expect(health).toMatchObject({
+        status: 'ok',
+        storage: { kind: 'MemoryStorageProvider', ok: true, error: null },
+        audit: {
+          configured: true,
+          healthy: true,
+          entries: 1,
+          retentionDays: 90,
+          evidenceAvailable: true,
+        },
+      })
+      expect(health.audit.location).toBe(dir)
+      expect(health.audit.head.hash).toMatch(/^[0-9a-f]{64}$/)
+      expect(typeof health.storage.latencyMs).toBe('number')
+    })
+
+    it('reports degraded storage rather than asserting health', async () => {
+      vi.spyOn(storage, 'get').mockRejectedValue(new Error('redis down'))
+
+      const health = (await (await get(app(), '/api/health')).json()) as any
+      expect(health.status).toBe('degraded')
+      expect(health.storage.ok).toBe(false)
+      expect(health.storage.error).toBe('redis down')
+
+      const publicHealth = (await (await app().request('/health')).json()) as any
+      expect(publicHealth).toMatchObject({ status: 'degraded', storageOk: false })
+    })
+
+    it('names the declared transformations that have never fired', async () => {
+      const instance = app()
+      await seed(instance)
+      await send(instance, { email: 'alice@example.com' })
+
+      const report = (await (await get(instance, '/api/rule-health')).json()) as any
+      const vendor = report.destinations.find((d: any) => d.destination === 'mixpanel')
+
+      expect(vendor.declared).toEqual([
+        { path: 'email', action: 'strip', matched: 1, lastFiredAt: expect.any(String) },
+        { path: 'never_sent', action: 'strip', matched: 0, lastFiredAt: null },
+      ])
+      expect(report.truncated).toBe(false)
+    })
+
+    it('stops forwarding when it can no longer record what it did', async () => {
+      const instance = app()
+      await seed(instance)
+
+      // Occupy today's segment path so the next append cannot land.
+      await mkdir(join(dir, `audit-${new Date().toISOString().slice(0, 10)}.ndjson`))
+
+      const res = await send(instance, { email: 'alice@example.com' })
+
+      // Opaque to the caller either way: a vendor SDK must not be able to tell.
+      expect(res.status).toBe(204)
+      expect(upstream).not.toHaveBeenCalled()
+
+      const health = (await (await get(instance, '/api/health')).json()) as any
+      expect(health.audit.evidenceAvailable).toBe(false)
+      expect(health.status).toBe('degraded')
+
+      // A firewall refusing every request is not healthy, even to a public probe.
+      const publicHealth = (await (await instance.request('/health')).json()) as any
+      expect(publicHealth).toMatchObject({ status: 'degraded', evidence: 'unavailable' })
+    })
+
+    it('keeps forwarding when the operator has accepted the risk', async () => {
+      const instance = app({ SLUICE_AUDIT_REQUIRED: 'false' })
+      await seed(instance)
+      await mkdir(join(dir, `audit-${new Date().toISOString().slice(0, 10)}.ndjson`))
+
+      await send(instance, { email: 'alice@example.com' })
+
+      expect(upstream).toHaveBeenCalled()
+    })
+
+    it('does not let the admin token delete the evidence', async () => {
+      const instance = app()
+      await seed(instance)
+      await send(instance, { email: 'alice@example.com' })
+
+      const reset = await instance.request('/api/debug/reset', {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer test-admin' },
+      })
+      expect(await reset.json()).toMatchObject({ auditSinkPreserved: true })
+
+      const [file] = (await readdir(dir)).filter((f) => f.endsWith('.ndjson'))
+      expect((await readFile(join(dir, file), 'utf8')).trim().split('\n')).toHaveLength(1)
+      expect(await (await get(instance, '/audit/verify')).json()).toMatchObject({
+        status: 'intact',
+      })
     })
   })
 })

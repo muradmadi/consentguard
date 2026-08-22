@@ -69,7 +69,11 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
    `Content-Length` is a claim, so the stream is counted as it arrives.
 5. **Consent gate** — `ConsentManager.hasConsent(consent, rule.category)`. Denied →
    blocked (`204`).
-6. **Scrub + build** — a registered `VendorAdapter` translates the intercepted beacon
+6. **Evidence gate** — `auditLogger.evidenceAvailable()`. A durable audit sink that
+   is configured and cannot write means a forward could not be evidenced, so it is not
+   made: blocked (`204`) with `evidence_unavailable`. Off with `SLUICE_AUDIT_REQUIRED=false`;
+   no sink configured is a choice, not a failure, and does not block.
+7. **Scrub + build** — a registered `VendorAdapter` translates the intercepted beacon
    into the vendor's server-side schema and calls `scrubPayload` itself. With no
    adapter, a generic JSON passthrough scrubs and forwards to `rule.upstreamUrl`.
    `scrubPayload` applies the rule's declared paths and then the value scan; both
@@ -79,10 +83,10 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
    A bodyless request with an original URL is a pixel: its whole payload is the query
    string, so it forwards as a `GET` to that URL and `scrubUrl` alone is a complete
    scrub. `unscrubbable_payload` therefore means a body that exists and will not parse.
-7. **Egress check** — `checkEgress` on the URL that will actually be fetched. Its host
+8. **Egress check** — `checkEgress` on the URL that will actually be fetched. Its host
    must be one the destination rule declares, and must not be an internal address.
    Refused → `blocked` with the reason in the audit.
-8. **Forward upstream** with `redirect: 'manual'`, then audit + metrics. Success → `204`,
+9. **Forward upstream** with `redirect: 'manual'`, then audit + metrics. Success → `204`,
    upstream failure → `502`. The audit is written after the upstream call resolves, so
    `decision` states what happened rather than what was intended.
 
@@ -123,8 +127,29 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
   destination the registry lacks, and no rule endpoint may go unmatched. That suite is
   excluded from the server's `typecheck` — it imports across a package boundary, which
   `rootDir` rejects.
+- **Audit sink** — `engine/audit/` is the record. `sink/file.ts` writes NDJSON to disk,
+  one UTC-day segment per file, never rewritten; `chain.ts` seals each record with the
+  digest of the one before it; `query.ts` holds the one filter predicate every reader
+  uses; `export.ts` renders CSV and NDJSON; `rule-health.ts` derives which declared
+  transformations have actually fired. The Redis list is demoted to a display cache
+  sized by `SLUICE_AUDIT_CACHE_ENTRIES`. `createApp` takes the sink as an argument so
+  the app never imports `node:fs`; `src/index.ts` builds it.
 - **Storage** — `engine/storage/` provides memory, redis, and cloudflare-kv behind one
   `StorageProvider` interface, with `hybrid.ts` as an in-process cache wrapper.
+
+### Audit configuration
+
+| Variable                      | Default           | Meaning                                                                 |
+| ----------------------------- | ----------------- | ----------------------------------------------------------------------- |
+| `SLUICE_AUDIT_DIR`            | `./.sluice/audit` | Where the durable record is written. Empty disables it.                 |
+| `SLUICE_AUDIT_RETENTION_DAYS` | `90`              | How long segments are kept before they are pruned and anchored.         |
+| `SLUICE_AUDIT_REQUIRED`       | `true`            | A configured sink that cannot write stops `/ingest` forwarding.         |
+| `SLUICE_AUDIT_CACHE_ENTRIES`  | `1000`            | Size of the display cache in front of the sink. Not a retention policy. |
+| `SLUICE_RULE_HEALTH_SCAN`     | `20000`           | Ceiling on the scan `/api/rule-health` derives its counts from.         |
+
+Deploying in a container means mounting a volume at `SLUICE_AUDIT_DIR`. Without one the
+record dies with the container, and `SLUICE_AUDIT_REQUIRED` will not catch it — the sink
+is writable, it is just ephemeral.
 
 ### Invariants
 
@@ -146,6 +171,17 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
   admin bearer is entered at runtime and held in session storage. Never read it from a
   build-time `VITE_*` variable. `just check-dist` fails the gate on anything
   secret-shaped in `packages/*/dist`.
+- **The record outlives the process.** Every decision is appended to a durable sink
+  before the display cache sees it, and the sink is never rewritten — `/api/debug/reset`
+  clears the cache and leaves the evidence. Retention deletes whole day segments and
+  writes a `{ seq, hash }` anchor to `manifest.json` so a legitimately shortened chain
+  still verifies. The chain detects an edit, a deletion or a reorder by anyone with
+  write access to the directory; it does not detect someone who re-chains the whole
+  directory including the anchor, which is why `/api/health` publishes the head hash for
+  anchoring off-box.
+- **Health is measured, never asserted.** `/health` and `/api/health` report a real
+  storage round trip and real sink counts. No operator surface may state a fact it did
+  not obtain from the proxy — that is the same defect as an audit built from a rule.
 - **The audit is derived, never declared.** `transformations` comes from the `ScrubResult`
   report — an entry means that transformation actually changed this payload. Never build
   it from `rule.transformations`, and never record the removed value.
@@ -212,6 +248,12 @@ Real, verified, and unfixed. Do not re-diagnose these from scratch:
 - **One real adapter.** `adapters/index.ts` registers GA4 and nothing else. The other
   five registry entries fall through to generic JSON passthrough; `facebook.ts` has a
   literal `<PIXEL_ID>` placeholder in its `upstreamUrl` and cannot work.
+- **Rule health only covers destinations the registry knows.** `/api/rule-health` joins
+  the audit against `RuleManager.getAllRules()`, which iterates `REGISTRY_KEYS`. An
+  override for an id the registry lacks gets no health row, because `StorageProvider`
+  cannot enumerate keys.
+- **A day's segment is read whole.** `FileAuditSink.query` loads one UTC-day file at a
+  time. Fine at the traffic this is built for; a very high-volume day is a large read.
 - **`getDefaultRule` returns `category: 'necessary'`**, which `hasConsent` always
   grants. Reachable when a malformed rule override exists for an id the registry does
   not know. Fail-open in a fail-closed system — though it now forwards nowhere, because

@@ -2,12 +2,19 @@ import { Hono, Context } from 'hono'
 import { cors } from 'hono/cors'
 import { getCookie } from 'hono/cookie'
 import { serveStatic } from '@hono/node-server/serve-static'
-import { ConsentStateSchema } from '@sluice/shared'
+import { ConsentStateSchema, PiiDetectorSchema } from '@sluice/shared'
 import { ConsentManager } from './engine/consent'
 import { scrubPayload } from './engine/transformer'
 import { scrubUrl } from './engine/url'
 import { metrics } from './engine/metrics'
-import { AuditLogger } from './engine/audit'
+import {
+  AuditLogger,
+  deriveRuleHealth,
+  toCsv,
+  toNdjson,
+  type AuditQuery,
+  type AuditSink,
+} from './engine/audit'
 import { checkEgress } from './engine/egress'
 import { RuleManager } from './engine/rules'
 import { createWebhookRouter } from './webhooks/cmp'
@@ -15,7 +22,16 @@ import { StorageProvider, HybridStorageProvider } from './engine/storage'
 import { getServerConfig, ServerConfig } from './config'
 import { getAdapter, VendorContext, VendorForward } from './destinations/adapters'
 
-export function createApp(storage: StorageProvider, env: any = {}) {
+export interface AppOptions {
+  /**
+   * Where the durable audit record is written. Passed in rather than built
+   * here: the sink that ships is backed by a filesystem, and this app has to
+   * run on runtimes that have none.
+   */
+  auditSink?: AuditSink
+}
+
+export function createApp(storage: StorageProvider, env: any = {}, options: AppOptions = {}) {
   const app = new Hono()
   const config = getServerConfig(env)
 
@@ -27,7 +43,11 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     effectiveStorage,
     config.defaultConsent as 'allow' | 'deny',
   )
-  const auditLogger = new AuditLogger(effectiveStorage)
+  const auditLogger = new AuditLogger(effectiveStorage, {
+    sink: options.auditSink,
+    cacheEntries: config.auditCacheEntries,
+    required: config.auditRequired,
+  })
   const ruleManager = new RuleManager(effectiveStorage)
 
   app.use('*', requestLogger)
@@ -69,7 +89,59 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     }),
   )
 
-  app.get('/health', (c) => c.json({ status: 'ok', storage: storage.constructor.name }))
+  /**
+   * Public liveness. It used to answer `ok` unconditionally, which made it a
+   * statement about the process being up rather than about the firewall
+   * working, so the storage result is now a real round trip. Deliberately thin:
+   * record counts and retention windows are operational detail and live behind
+   * the bearer on `/api/health`.
+   */
+  app.get('/health', async (c) => {
+    const probe = await probeStorage(effectiveStorage)
+    const evidenceAvailable = await auditLogger.evidenceAvailable()
+    return c.json({
+      // A firewall that is refusing every request because it cannot record what
+      // it does is not healthy, whatever its storage says.
+      status: probe.ok && evidenceAvailable ? 'ok' : 'degraded',
+      storage: storage.constructor.name,
+      storageOk: probe.ok,
+      evidence: evidenceAvailable ? 'available' : 'unavailable',
+    })
+  })
+
+  /**
+   * Admin: what the operator surface is allowed to state as fact.
+   *
+   * Every field here is measured. The dashboard used to render "System Healthy"
+   * and "Redis: Connected" as literal strings, which in a product whose value is
+   * that its reporting is derived rather than asserted was the same class of
+   * problem as an audit built from a rule's declarations.
+   */
+  app.get('/api/health', async (c) => {
+    if (!requireAdmin(c, config)) return c.json({ error: 'Unauthorized' }, 403)
+
+    const probe = await probeStorage(effectiveStorage)
+    const sink = await auditLogger.status()
+    const evidenceAvailable = await auditLogger.evidenceAvailable()
+
+    return c.json({
+      status: probe.ok && evidenceAvailable ? 'ok' : 'degraded',
+      storage: {
+        kind: storage.constructor.name,
+        ok: probe.ok,
+        latencyMs: probe.latencyMs,
+        error: probe.error,
+      },
+      audit: {
+        ...sink,
+        cacheEntries: config.auditCacheEntries,
+        required: config.auditRequired,
+        evidenceAvailable,
+      },
+      detectors: config.detectors,
+      uptimeSeconds: metrics.getMetrics().uptimeSeconds,
+    })
+  })
 
   /**
    * Admin: consent CRUD by user id. Bearer-secured.
@@ -131,17 +203,83 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     return c.json(metrics.getMetrics())
   })
 
+  /**
+   * Admin: the record, queryable.
+   *
+   * "Prove no email reached Meta last Tuesday" is the question this endpoint
+   * exists to answer, so it takes a time range, a destination, a decision and a
+   * detector rather than handing back the newest hundred and leaving the rest to
+   * the reader. `format` returns the same page as a file, hashes included, so an
+   * export can be re-verified against the chain instead of taken on trust.
+   */
   app.get('/audit', async (c) => {
     if (!requireAdmin(c, config)) return c.json({ error: 'Unauthorized' }, 403)
-    return c.json(await auditLogger.getLogs(100))
+
+    const parsed = parseAuditQuery(c)
+    if (!parsed.ok) return c.json({ error: parsed.reason }, 400)
+
+    const page = await auditLogger.query(parsed.query)
+    const format = c.req.query('format')
+
+    if (format === 'csv' || format === 'ndjson') {
+      const body = format === 'csv' ? toCsv(page.records) : toNdjson(page.records)
+      return c.text(body, 200, {
+        'Content-Type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/x-ndjson',
+        'Content-Disposition': `attachment; filename="sluice-audit.${format}"`,
+      })
+    }
+
+    return c.json(page)
   })
 
+  /**
+   * Admin: does the record still hold together.
+   *
+   * Every entry carries the digest of the one before it, so an edit, a deletion
+   * or a reorder breaks the chain and shows up here with the sequence number it
+   * broke at. Retention is not tampering: pruning writes an anchor, and a chain
+   * that legitimately stops short of its genesis reports `truncated`.
+   */
+  app.get('/audit/verify', async (c) => {
+    if (!requireAdmin(c, config)) return c.json({ error: 'Unauthorized' }, 403)
+    return c.json(await auditLogger.verify())
+  })
+
+  /**
+   * Admin: which declared transformations have actually fired.
+   *
+   * A rule that never matches is a rule nobody is being protected by, and the
+   * audit is the only thing that knows the difference. Derived from a bounded
+   * scan of the retained record, and it says how far it scanned.
+   */
+  app.get('/api/rule-health', async (c) => {
+    if (!requireAdmin(c, config)) return c.json({ error: 'Unauthorized' }, 403)
+
+    const parsed = parseAuditQuery(c)
+    if (!parsed.ok) return c.json({ error: parsed.reason }, 400)
+
+    return c.json(
+      await deriveRuleHealth(auditLogger, await ruleManager.getAllRules(), {
+        scanLimit: config.ruleHealthScan,
+        from: parsed.query.from,
+        to: parsed.query.to,
+      }),
+    )
+  })
+
+  /**
+   * Admin: wipe the mutable state.
+   *
+   * The durable audit sink is deliberately not reset. A record that whoever
+   * holds the admin token can delete proves nothing about what happened, so
+   * this clears the display cache and leaves the evidence where it is.
+   */
   app.delete('/api/debug/reset', async (c) => {
     if (!requireAdmin(c, config)) return c.json({ error: 'Unauthorized' }, 403)
     metrics.reset()
     await auditLogger.clear()
     await storage.flushAll()
-    return c.json({ status: 'reset_complete' })
+    return c.json({ status: 'reset_complete', auditSinkPreserved: true })
   })
 
   /**
@@ -211,6 +349,22 @@ export function createApp(storage: StorageProvider, env: any = {}) {
         reason: 'consent_missing',
         purposesRequired: rule.category,
         purposesGranted: Object.keys(consent.purposes).filter((k) => consent.purposes[k]),
+      })
+      return c.body(null, 204)
+    }
+
+    // The evidence gate. Fail-closed already covers storage, parse and consent
+    // failures; this applies it to the record itself. A configured sink that
+    // cannot write means we would be forwarding personal data with no proof of
+    // what we removed, which is the half of the claim that matters months later.
+    if (!(await auditLogger.evidenceAvailable())) {
+      metrics.recordRequest(destination, 'blocked')
+      await auditLogger.log({
+        userId,
+        destination,
+        decision: 'blocked',
+        reason: 'evidence_unavailable',
+        purposesRequired: rule.category,
       })
       return c.body(null, 204)
     }
@@ -446,6 +600,96 @@ function withScrubbedUrl(forward: VendorForward, ctx: VendorContext): VendorForw
   const scrub = scrubUrl(forward.url, ctx.rule, { detectors: ctx.serverConfig.detectors })
   if (scrub.report.length === 0) return forward
   return { ...forward, url: scrub.url, report: [...forward.report, ...scrub.report] }
+}
+
+/**
+ * A real storage round trip, rather than the fact that the process is running.
+ *
+ * Writes a probe key, reads it back, and removes it. `/health` used to answer
+ * `ok` unconditionally and the dashboard printed "Redis: Connected" as a
+ * literal; both were statements nobody had measured.
+ */
+async function probeStorage(
+  storage: StorageProvider,
+): Promise<{ ok: boolean; latencyMs: number; error: string | null }> {
+  const key = 'sluice_health_probe'
+  const token = `${Date.now()}`
+  const start = Date.now()
+
+  try {
+    await storage.set(key, token, 30)
+    const readBack = await storage.get(key)
+    await storage.del(key)
+    if (readBack !== token) {
+      return { ok: false, latencyMs: Date.now() - start, error: 'probe value did not read back' }
+    }
+    return { ok: true, latencyMs: Date.now() - start, error: null }
+  } catch (error) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - start,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+type ParsedQuery = { ok: true; query: AuditQuery } | { ok: false; reason: string }
+
+/**
+ * Turn `/audit`'s query string into a filter.
+ *
+ * Rejects rather than silently ignores: an operator producing evidence needs to
+ * know that a mistyped `decision=forwaded` narrowed nothing, not to be handed a
+ * full page and left to assume it was filtered.
+ */
+function parseAuditQuery(c: Context): ParsedQuery {
+  const query: AuditQuery = {}
+
+  for (const key of ['from', 'to'] as const) {
+    const value = c.req.query(key)
+    if (value === undefined) continue
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return { ok: false, reason: `invalid_${key}` }
+    query[key] = parsed.toISOString()
+  }
+
+  const decision = c.req.query('decision')
+  if (decision !== undefined) {
+    if (decision !== 'forwarded' && decision !== 'blocked' && decision !== 'failed') {
+      return { ok: false, reason: 'invalid_decision' }
+    }
+    query.decision = decision
+  }
+
+  const detector = c.req.query('detector')
+  if (detector !== undefined) {
+    if (!PiiDetectorSchema.safeParse(detector).success) {
+      return { ok: false, reason: 'invalid_detector' }
+    }
+    query.detector = detector
+  }
+
+  const destination = c.req.query('destination')
+  if (destination) query.destination = destination
+
+  const userId = c.req.query('userId')
+  if (userId) query.userId = userId
+
+  const limit = c.req.query('limit')
+  if (limit !== undefined) {
+    const parsed = Number(limit)
+    if (!Number.isInteger(parsed) || parsed < 1) return { ok: false, reason: 'invalid_limit' }
+    query.limit = parsed
+  }
+
+  const cursor = c.req.query('cursor')
+  if (cursor !== undefined) {
+    const parsed = Number(cursor)
+    if (!Number.isInteger(parsed) || parsed < 0) return { ok: false, reason: 'invalid_cursor' }
+    query.cursor = parsed
+  }
+
+  return { ok: true, query }
 }
 
 function requireAdmin(c: Context, config: ServerConfig): boolean {

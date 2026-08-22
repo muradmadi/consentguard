@@ -43,6 +43,10 @@ coverage/
 Thumbs.db
 ehthumbs.db
 
+# Audit records — the durable sink's default location. Real records carry user
+# identifiers and are evidence, not source.
+.sluice/
+
 # Misc
 .cache/
 .eslintcache

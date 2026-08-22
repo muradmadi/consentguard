@@ -5,7 +5,7 @@ import prompts from 'prompts'
 import * as fs from 'fs'
 import * as path from 'path'
 import { spawn } from 'child_process'
-import type { AuditRecord } from '@sluice/shared'
+import type { AuditPage, ChainStatus } from '@sluice/shared'
 import { buildConfig, renderCompose } from './config'
 
 declare const __CLI_VERSION__: string
@@ -156,8 +156,8 @@ program
 
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
-        const logs = (await res.json()) as AuditRecord[]
-        const newLogs = logs.filter((l) => l.timestamp > lastTimestamp).reverse()
+        const page = (await res.json()) as AuditPage
+        const newLogs = page.records.filter((l) => l.timestamp > lastTimestamp).reverse()
 
         for (const log of newLogs) {
           const time = pc.dim(new Date(log.timestamp).toLocaleTimeString())
@@ -242,7 +242,51 @@ program
       /* best-effort probe; the offline case is already reported above */
     }
 
-    // 3. Check Rules
+    // 3. Check the durable record — the claim is "and here is the proof", so
+    //    how much proof there is, and whether it still verifies, is status.
+    try {
+      const res = await fetch(`${options.url}/api/health`, {
+        headers: { Authorization: `Bearer ${secret}` },
+      })
+
+      if (res.ok) {
+        const health = (await res.json()) as any
+        const audit = health.audit
+        if (!audit.configured) {
+          console.log(`${pc.yellow('○')} Audit:     ${pc.bold('No durable record')}`)
+          console.log(
+            pc.dim(
+              `  └─ A ${audit.cacheEntries}-entry cache that rolls over. Set SLUICE_AUDIT_DIR.`,
+            ),
+          )
+        } else {
+          const marker = audit.evidenceAvailable ? pc.green('●') : pc.red('○')
+          console.log(
+            `${marker} Audit:     ${pc.bold(`${audit.entries} records`)}${
+              audit.retentionDays ? pc.dim(` (${audit.retentionDays}-day retention)`) : ''
+            }`,
+          )
+          if (audit.oldest) {
+            console.log(`  ├─ Oldest:    ${pc.dim(new Date(audit.oldest).toISOString())}`)
+          }
+          if (audit.head) {
+            console.log(
+              `  ├─ Head:      ${pc.dim(`#${audit.head.seq} ${audit.head.hash.slice(0, 12)}`)}`,
+            )
+          }
+          console.log(`  └─ Location:  ${pc.dim(audit.location)}`)
+          if (!audit.evidenceAvailable) {
+            console.log(
+              pc.red(`     Not recording — forwarding is stopped. ${audit.lastError ?? ''}`),
+            )
+          }
+        }
+      }
+    } catch {
+      /* best-effort probe; the offline case is already reported above */
+    }
+
+    // 4. Check Rules
     try {
       const res = await fetch(`${options.url}/api/rules`, {
         headers: { Authorization: `Bearer ${secret}` },
@@ -260,7 +304,116 @@ program
       /* best-effort probe; the offline case is already reported above */
     }
 
-    console.log(pc.dim('\nUse "sluice logs" to see real-time traffic.'))
+    console.log(
+      pc.dim('\nUse "sluice logs" to see real-time traffic, "sluice verify" to check the chain.'),
+    )
+  })
+
+/**
+ * Check that the record still holds together.
+ *
+ * Every audit entry carries the digest of the one before it, so an edit or a
+ * deletion breaks the chain. Exits non-zero on a break so this can run from
+ * cron and be noticed.
+ */
+program
+  .command('verify')
+  .description('Verify the audit chain has not been edited or truncated')
+  .option('-u, --url <url>', 'Proxy URL', 'http://localhost:3000')
+  .option('-s, --secret <secret>', 'Admin Secret')
+  .action(async (options) => {
+    const secret = requireSecret(options.secret)
+
+    let result: ChainStatus
+    try {
+      const res = await fetch(`${options.url}/audit/verify`, {
+        headers: { Authorization: `Bearer ${secret}` },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      result = (await res.json()) as ChainStatus
+    } catch (e: any) {
+      console.error(pc.red(`❌ Could not reach the proxy: ${e.message}`))
+      process.exit(1)
+    }
+
+    const head = result.head ? `#${result.head.seq} ${result.head.hash.slice(0, 12)}` : 'none'
+
+    switch (result.status) {
+      case 'intact':
+        console.log(pc.green(`✓ Chain intact — ${result.checked} records verified, head ${head}`))
+        break
+      case 'truncated':
+        // Retention deleting old segments is not tampering; say so plainly.
+        console.log(
+          pc.green(
+            `✓ Chain intact for the retained window — ${result.checked} records, head ${head}`,
+          ),
+        )
+        console.log(pc.dim(`  ${result.reason ?? ''}`))
+        break
+      case 'unavailable':
+        console.log(
+          pc.yellow(`○ Nothing to verify — ${result.reason ?? 'no durable audit record'}`),
+        )
+        break
+      default:
+        console.error(pc.red(`✗ Chain ${result.status} at seq ${result.brokenAt}`))
+        console.error(pc.red(`  ${result.reason ?? ''}`))
+        process.exit(1)
+    }
+  })
+
+/**
+ * Produce the record for someone who asked for it.
+ *
+ * Writes to a file or to stdout, so it can be piped or attached as-is. NDJSON
+ * carries the hashes, which is what makes an export re-verifiable rather than
+ * something the recipient has to take on trust.
+ */
+program
+  .command('export')
+  .description('Export audit records as NDJSON or CSV')
+  .option('-u, --url <url>', 'Proxy URL', 'http://localhost:3000')
+  .option('-s, --secret <secret>', 'Admin Secret')
+  .option('-f, --format <format>', 'ndjson or csv', 'ndjson')
+  .option('--from <iso>', 'Only records at or after this time')
+  .option('--to <iso>', 'Only records at or before this time')
+  .option('-d, --destination <id>', 'Only this destination')
+  .option('--decision <decision>', 'forwarded, blocked or failed')
+  .option('--detector <detector>', 'Only records where this detector fired')
+  .option('-l, --limit <n>', 'Maximum records', '10000')
+  .option('-o, --out <file>', 'Write to a file instead of stdout')
+  .action(async (options) => {
+    const secret = requireSecret(options.secret)
+
+    if (options.format !== 'ndjson' && options.format !== 'csv') {
+      console.error(pc.red('❌ --format must be ndjson or csv'))
+      process.exit(1)
+    }
+
+    const params = new URLSearchParams({ format: options.format, limit: options.limit })
+    for (const key of ['from', 'to', 'destination', 'decision', 'detector'] as const) {
+      if (options[key]) params.set(key, options[key])
+    }
+
+    try {
+      const res = await fetch(`${options.url}/audit?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${secret}` },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const body = await res.text()
+
+      if (options.out) {
+        fs.writeFileSync(options.out, body)
+        const lines = body.trim() ? body.trim().split('\n').length : 0
+        console.log(pc.green(`Wrote ${lines} line(s) to ${pc.bold(options.out)}`))
+      } else {
+        process.stdout.write(body)
+      }
+    } catch (e: any) {
+      console.error(pc.red(`❌ Export failed: ${e.message}`))
+      process.exit(1)
+    }
   })
 
 program.parse()
