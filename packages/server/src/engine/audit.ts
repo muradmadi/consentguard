@@ -1,15 +1,7 @@
+import { AuditRecord, AuditRecordSchema } from '@sluice/shared'
 import { StorageProvider } from './storage'
 
-export interface AuditRecord {
-  timestamp: string
-  userId: string
-  destination: string
-  decision: 'forwarded' | 'blocked' | 'buffered' | 'scrubbed'
-  reason: string
-  purposesRequired?: string
-  purposesGranted?: string[]
-  transformationsApplied?: string[]
-}
+export type { AuditRecord }
 
 export class AuditLogger {
   private storage: StorageProvider
@@ -23,8 +15,13 @@ export class AuditLogger {
   /**
    * Log a decision record to storage.
    */
-  async log(record: Omit<AuditRecord, 'timestamp'>): Promise<void> {
+  async log(
+    record: Omit<AuditRecord, 'timestamp' | 'transformations'> & {
+      transformations?: AuditRecord['transformations']
+    },
+  ): Promise<void> {
     const fullRecord: AuditRecord = {
+      transformations: [],
       ...record,
       timestamp: new Date().toISOString(),
     }
@@ -38,11 +35,31 @@ export class AuditLogger {
   }
 
   /**
-   * Retrieve the latest audit logs.
+   * Retrieve the latest audit logs. Entries that do not parse against the
+   * current schema are dropped rather than surfaced — a record we cannot
+   * vouch for is not evidence.
    */
   async getLogs(limit = 100): Promise<AuditRecord[]> {
     const data = await this.storage.lrange(this.KEY, 0, limit - 1)
-    return data.map((entry) => JSON.parse(entry))
+    const records: AuditRecord[] = []
+
+    for (const entry of data) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(entry)
+      } catch {
+        console.warn('[Sluice] Discarded unparseable audit entry')
+        continue
+      }
+      const result = AuditRecordSchema.safeParse(parsed)
+      if (result.success) {
+        records.push(result.data)
+      } else {
+        console.warn('[Sluice] Discarded audit entry that failed schema validation')
+      }
+    }
+
+    return records
   }
 
   /**

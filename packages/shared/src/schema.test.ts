@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
+  AuditRecordSchema,
   ConsentStateSchema,
   DestinationRuleSchema,
   IngestRequestSchema,
   TransformationActionSchema,
+  TransformationRecordSchema,
 } from './schema'
 
 describe('ConsentStateSchema', () => {
@@ -98,5 +100,77 @@ describe('IngestRequestSchema', () => {
 
   it('rejects a missing destination', () => {
     expect(IngestRequestSchema.safeParse({ payload: {} }).success).toBe(false)
+  })
+})
+
+describe('TransformationRecordSchema', () => {
+  it('accepts a record of one firing transformation', () => {
+    const parsed = TransformationRecordSchema.parse({
+      path: 'events.*.params.email',
+      action: 'hash',
+      matched: 2,
+    })
+    expect(parsed.matched).toBe(2)
+  })
+
+  it('rejects a matched count of zero', () => {
+    // A transformation that changed nothing is not evidence and is never stored.
+    const result = TransformationRecordSchema.safeParse({
+      path: 'email',
+      action: 'strip',
+      matched: 0,
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects an unknown action', () => {
+    const result = TransformationRecordSchema.safeParse({
+      path: 'email',
+      action: 'encrypt',
+      matched: 1,
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe('AuditRecordSchema', () => {
+  const minimal = {
+    timestamp: '2026-08-22T10:00:00.000Z',
+    userId: 'u_123',
+    destination: 'ga4',
+    decision: 'forwarded',
+    reason: 'consent_granted',
+  }
+
+  it('defaults transformations to an empty list', () => {
+    const parsed = AuditRecordSchema.parse(minimal)
+    expect(parsed.transformations).toEqual([])
+  })
+
+  it.each(['forwarded', 'blocked', 'buffered', 'failed'])('accepts decision %s', (decision) => {
+    expect(AuditRecordSchema.parse({ ...minimal, decision }).decision).toBe(decision)
+  })
+
+  it('rejects the retired scrubbed decision', () => {
+    // Scrubbing is no longer a decision; it is transformations.length > 0.
+    expect(AuditRecordSchema.safeParse({ ...minimal, decision: 'scrubbed' }).success).toBe(false)
+  })
+
+  it('rejects the retired stringly-typed transformationsApplied shape', () => {
+    const result = AuditRecordSchema.safeParse({
+      ...minimal,
+      transformations: ['strip:email', 'hash:phone'],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('parses a record carrying real transformation evidence', () => {
+    const parsed = AuditRecordSchema.parse({
+      ...minimal,
+      purposesRequired: 'analytics',
+      purposesGranted: ['analytics'],
+      transformations: [{ path: 'email', action: 'strip', matched: 1 }],
+    })
+    expect(parsed.transformations[0].path).toBe('email')
   })
 })

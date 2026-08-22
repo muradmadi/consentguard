@@ -1,6 +1,7 @@
 import { Activity, Shield, ShieldOff } from 'lucide-react'
+import type { AuditRecord } from '@sluice/shared'
 
-export function LiveTraffic({ logs }: { logs: any[] }) {
+export function LiveTraffic({ logs }: { logs: AuditRecord[] }) {
   // Newest first; the API already returns the log in reverse-chronological order.
   const stream = logs.slice(0, 15)
 
@@ -36,7 +37,7 @@ export function LiveTraffic({ logs }: { logs: any[] }) {
                 animation: 'fade-in 0.3s ease',
               }}
             >
-              {log.decision === 'blocked' ? (
+              {log.decision === 'blocked' || log.decision === 'failed' ? (
                 <ShieldOff size={18} color="#ee0000" />
               ) : (
                 <Shield size={18} color="#0070f3" />
@@ -56,8 +57,10 @@ export function LiveTraffic({ logs }: { logs: any[] }) {
                   </span>
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--accents-5)', marginTop: '2px' }}>
-                  {log.decision === 'scrubbed' ? 'PII Scrubbed' : log.decision.toUpperCase()} •{' '}
-                  {log.userId.slice(0, 8)}...
+                  {log.decision.toUpperCase()}
+                  {log.transformations.length > 0 &&
+                    ` • ${log.transformations.reduce((n, t) => n + t.matched, 0)} scrubbed`}{' '}
+                  • {log.userId.slice(0, 8)}...
                 </div>
               </div>
             </div>

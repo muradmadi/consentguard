@@ -4,15 +4,26 @@ import { fetchStats, fetchRules, fetchAuditLogs, updateRule } from './lib/api'
 import { RuleEditor } from './components/RuleEditor'
 import { LiveTraffic } from './components/LiveTraffic'
 import { AlertCircle } from 'lucide-react'
-import type { DestinationRule } from '@sluice/shared'
+import type { AuditRecord, DestinationRule } from '@sluice/shared'
+
+/** Blocked and failed both mean nothing reached the vendor, but for different reasons. */
+function decisionBadge(decision: AuditRecord['decision']): string {
+  if (decision === 'blocked' || decision === 'failed') return 'badge-error'
+  if (decision === 'buffered') return ''
+  return 'badge-success'
+}
+
+function describeTransformations(log: AuditRecord): string {
+  return log.transformations.map((t) => `${t.action} ${t.path} (×${t.matched})`).join(', ')
+}
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [stats, setStats] = useState<any>(null)
   const [rules, setRules] = useState<DestinationRule[]>([])
-  const [logs, setLogs] = useState<any[]>([])
+  const [logs, setLogs] = useState<AuditRecord[]>([])
   const [selectedRule, setSelectedRule] = useState<DestinationRule | null>(null)
-  const [selectedLog, setSelectedLog] = useState<any | null>(null)
+  const [selectedLog, setSelectedLog] = useState<AuditRecord | null>(null)
   const [, setIsLoading] = useState(false)
 
   useEffect(() => {
@@ -183,12 +194,18 @@ function App() {
                       </td>
                       <td>{log.destination}</td>
                       <td>
-                        <span
-                          className={`badge ${log.decision === 'blocked' ? 'badge-error' : log.decision === 'scrubbed' ? 'badge-success' : 'badge-success'}`}
-                          style={{ opacity: log.decision === 'scrubbed' ? 0.8 : 1 }}
-                        >
+                        <span className={`badge ${decisionBadge(log.decision)}`}>
                           {log.decision}
                         </span>
+                        {log.transformations.length > 0 && (
+                          <span
+                            className="badge"
+                            style={{ marginLeft: '6px', opacity: 0.8 }}
+                            title={describeTransformations(log)}
+                          >
+                            {log.transformations.length} scrubbed
+                          </span>
+                        )}
                       </td>
                       <td style={{ color: 'var(--accents-5)' }}>{log.reason}</td>
                       <td style={{ color: 'var(--accents-4)', fontSize: '12px' }}>
@@ -382,7 +399,7 @@ function App() {
                 </thead>
                 <tbody>
                   {logs.length > 0 ? (
-                    logs.map((log: any, i: number) => (
+                    logs.map((log, i) => (
                       <tr key={i} onClick={() => setSelectedLog(log)} style={{ cursor: 'pointer' }}>
                         <td>
                           <code style={{ fontSize: '11px' }}>{log.userId}</code>
@@ -392,7 +409,7 @@ function App() {
                         </td>
                         <td>
                           <span
-                            className={`badge ${log.decision === 'blocked' ? 'badge-error' : log.decision === 'buffered' ? '' : 'badge-success'}`}
+                            className={`badge ${decisionBadge(log.decision)}`}
                             style={
                               log.decision === 'buffered'
                                 ? { background: '#0070f3', color: 'white', fontWeight: 600 }
@@ -401,6 +418,15 @@ function App() {
                           >
                             {log.decision.toUpperCase()}
                           </span>
+                          {log.transformations.length > 0 && (
+                            <span
+                              className="badge"
+                              style={{ marginLeft: '6px', opacity: 0.8 }}
+                              title={describeTransformations(log)}
+                            >
+                              {log.transformations.length} scrubbed
+                            </span>
+                          )}
                         </td>
                         <td>
                           <span style={{ fontSize: '12px', color: 'var(--accents-4)' }}>
@@ -455,32 +481,39 @@ function App() {
               </div>
               <div className="form-group">
                 <label>Decision</label>
-                <span
-                  className={`badge ${selectedLog.decision === 'blocked' ? 'badge-error' : 'badge-success'}`}
-                >
+                <span className={`badge ${decisionBadge(selectedLog.decision)}`}>
                   {selectedLog.decision}
                 </span>
               </div>
-              {selectedLog.transformationsApplied &&
-                selectedLog.transformationsApplied.length > 0 && (
-                  <div className="form-group">
-                    <label>Transformations Applied</label>
-                    <ul style={{ listStyle: 'none', padding: 0 }}>
-                      {selectedLog.transformationsApplied.map((t: string, i: number) => (
-                        <li
-                          key={i}
-                          style={{
-                            padding: '4px 0',
-                            borderBottom: '1px solid var(--accents-1)',
-                            fontSize: '13px',
-                          }}
-                        >
-                          <code>{t}</code>
-                        </li>
-                      ))}
-                    </ul>
+              <div className="form-group">
+                <label>Personal Data Removed</label>
+                {selectedLog.transformations.length === 0 ? (
+                  <div style={{ fontSize: '13px', color: 'var(--accents-4)' }}>
+                    Nothing matched — this payload carried none of the declared fields.
                   </div>
+                ) : (
+                  <ul style={{ listStyle: 'none', padding: 0 }}>
+                    {selectedLog.transformations.map((t, i) => (
+                      <li
+                        key={i}
+                        style={{
+                          padding: '4px 0',
+                          borderBottom: '1px solid var(--accents-1)',
+                          fontSize: '13px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: '12px',
+                        }}
+                      >
+                        <code>{t.path}</code>
+                        <span style={{ color: 'var(--accents-4)' }}>
+                          {t.action} × {t.matched}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 )}
+              </div>
               <div className="form-group">
                 <label>Reason</label>
                 <p>{selectedLog.reason}</p>

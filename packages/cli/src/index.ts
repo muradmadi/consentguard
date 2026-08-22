@@ -5,6 +5,7 @@ import prompts from 'prompts'
 import * as fs from 'fs'
 import * as path from 'path'
 import { spawn } from 'child_process'
+import type { AuditRecord } from '@sluice/shared'
 import { buildConfig, renderCompose } from './config'
 
 declare const __CLI_VERSION__: string
@@ -125,7 +126,8 @@ program
   .action(async (options) => {
     console.log(pc.cyan('🛡️  Streaming Sluice Logs... (Ctrl+C to stop)\n'))
 
-    let lastTimestamp = 0
+    // ISO 8601 timestamps sort lexicographically, so a string cursor works.
+    let lastTimestamp = ''
     const secret = options.secret || process.env.ADMIN_SECRET || 'dev-admin-secret'
 
     const poll = async () => {
@@ -136,7 +138,7 @@ program
 
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
-        const logs: any[] = await res.json()
+        const logs = (await res.json()) as AuditRecord[]
         const newLogs = logs.filter((l) => l.timestamp > lastTimestamp).reverse()
 
         for (const log of newLogs) {
@@ -144,15 +146,17 @@ program
           const decision =
             log.decision === 'blocked'
               ? pc.red('BLOCKED')
-              : log.decision === 'scrubbed'
-                ? pc.yellow('SCRUBBED')
-                : pc.green('FORWARDED')
+              : log.decision === 'failed'
+                ? pc.red('FAILED')
+                : log.decision === 'buffered'
+                  ? pc.yellow('BUFFERED')
+                  : pc.green('FORWARDED')
 
           console.log(
             `${time} | ${pc.bold(log.destination.padEnd(15))} | ${decision.padEnd(20)} | ${pc.dim(log.userId)}`,
           )
-          if (log.transformationsApplied?.length > 0) {
-            console.log(pc.dim(`  └─ Transformations: ${log.transformationsApplied.join(', ')}`))
+          for (const t of log.transformations) {
+            console.log(pc.dim(`  └─ ${t.action} ${t.path} (${t.matched})`))
           }
           lastTimestamp = log.timestamp
         }

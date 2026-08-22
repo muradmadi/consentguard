@@ -80,7 +80,10 @@ Create `packages/server/src/destinations/adapters/<vendor>.ts` implementing
 - Read the original request from `ctx` — `originalUrl`, `query`, `rawBody`, `jsonBody`,
   `headers` (already lowercased).
 - Build the vendor's server-side payload.
-- Call `scrubPayload(payload, ctx.rule)` itself and return `scrubbed: true`.
+- Call `scrubPayload(payload, ctx.rule)` itself. It returns `{ payload, report }` — forward
+  the scrubbed payload and pass `report` straight through as the forward's `report` field.
+  That report is what the audit record is built from, so never synthesise it from the rule:
+  an entry must mean the transformation actually fired against this payload.
 - Return `{ skip: true, reason }` when required credentials are missing, rather than
   forwarding something incomplete. The caller turns that into a clean `204`.
 

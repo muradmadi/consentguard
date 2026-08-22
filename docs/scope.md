@@ -50,22 +50,24 @@ product, and they go:
 
 Ordered. Each is independently shippable and independently commit-able.
 
-### 1. Fix the evidence, because the evidence is the product
+### 1. Fix the evidence, because the evidence is the product — **done**
 
-`app.ts` computes the audit trail as:
+The audit was computed from the rule's _declared_ transformation list, so a request
+carrying no personal data was logged as `decision: 'scrubbed'` with a full list of
+transformations that matched nothing.
 
-```ts
-const transformationsApplied = rule.transformations?.map((t) => `${t.action}:${t.path}`) || []
-```
+`scrubPayload` now returns `{ payload, report }`, where the report carries only what
+actually changed. `AuditRecordSchema` lives in `@sluice/shared`; `decision` is
+`forwarded | blocked | buffered | failed`, written after the upstream call resolves, and
+"was anything scrubbed" is `transformations.length > 0`. Two leaks closed alongside it:
+buffer replay forwarded raw string payloads unscrubbed, and `sluice logs` compared an ISO
+timestamp against `0` so it never printed a line.
 
-That is the rule's _declared_ transformation list, not what actually fired. A request
-carrying no personal data at all is logged as `decision: 'scrubbed'` with a full list of
-transformations that matched nothing. The one artifact the whole product rests on
-currently overstates what it did.
-
-`scrubPayload` must return what it changed — path, action, and whether the path was
-present — and the audit record must reflect only that. `decision` becomes `'scrubbed'`
-only when at least one transformation actually matched.
+Still open, and worth doing next time the rules are touched: a **rule-health view**. The
+report knows which declared transformations never match, which would surface dead rules
+like `mixpanel.ts`'s `properties.$email` — a path that cannot exist because that
+destination has no adapter. The audit deliberately does not store unmatched entries, so
+this needs its own surface.
 
 ### 2. Detect personal data that was not declared
 

@@ -13,7 +13,7 @@ import { RuleManager } from './engine/rules'
 import { createWebhookRouter } from './webhooks/cmp'
 import { StorageProvider, HybridStorageProvider } from './engine/storage'
 import { getServerConfig, ServerConfig } from './config'
-import { getAdapter, VendorContext } from './destinations/adapters'
+import { getAdapter, VendorContext, VendorForward } from './destinations/adapters'
 
 export function createApp(storage: StorageProvider, env: any = {}) {
   const app = new Hono()
@@ -282,81 +282,25 @@ export function createApp(storage: StorageProvider, env: any = {}) {
       serverConfig: config,
     }
 
-    const adapter = getAdapter(destination)
-    let forward: {
-      url: string
-      method: string
-      headers: Record<string, string>
-      body: string
-    } | null
+    const built = await buildForward(ctx)
 
-    if (adapter) {
-      const result = await adapter.buildRequest(ctx)
-      if (result && 'skip' in result) {
-        // Adapter deliberately declined — treat as a drop.
-        await auditLogger.log({
-          userId,
-          destination,
-          decision: 'blocked',
-          reason: `adapter_skip:${result.reason}`,
-          purposesRequired: rule.category,
-        })
-        metrics.recordRequest(destination, 'blocked')
-        return c.body(null, 204)
-      }
-      forward = result
-    } else {
-      // No adapter registered → generic passthrough. Only works if the rule
-      // has an upstreamUrl and the vendor accepts JSON. This is scaffolding;
-      // real destinations need real adapters.
-      if (!rule.upstreamUrl) {
-        await auditLogger.log({
-          userId,
-          destination,
-          decision: 'blocked',
-          reason: 'no_adapter_and_no_upstream_url',
-          purposesRequired: rule.category,
-        })
-        return c.body(null, 204)
-      }
-      const payload = jsonBody ?? {}
-      const scrubbed = scrubPayload(payload, rule)
-      forward = {
-        url: c.req.header('X-Original-Url') || rule.upstreamUrl,
-        method: c.req.method,
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': c.req.header('User-Agent') || 'Sluice Proxy',
-        },
-        body: JSON.stringify(scrubbed),
-      }
-    }
-
-    if (!forward) {
-      // Adapter returned null: drop cleanly.
+    if (!built.ok) {
       await auditLogger.log({
         userId,
         destination,
         decision: 'blocked',
-        reason: 'adapter_returned_null',
+        reason: built.reason,
         purposesRequired: rule.category,
       })
       metrics.recordRequest(destination, 'blocked')
       return c.body(null, 204)
     }
 
-    const transformationsApplied = rule.transformations?.map((t) => `${t.action}:${t.path}`) || []
-    await auditLogger.log({
-      userId,
-      destination,
-      decision: transformationsApplied.length > 0 ? 'scrubbed' : 'forwarded',
-      reason: 'consent_granted',
-      purposesRequired: rule.category,
-      purposesGranted: Object.keys(consent.purposes).filter((k) => consent.purposes[k]),
-      transformationsApplied,
-    })
-    metrics.recordRequest(destination, 'forwarded')
+    const { forward } = built
+    const purposesGranted = Object.keys(consent.purposes).filter((k) => consent.purposes[k])
 
+    // The audit is written after the upstream call resolves, so `decision`
+    // states what happened rather than what we intended.
     try {
       const response = await fetch(forward.url, {
         method: forward.method,
@@ -365,12 +309,40 @@ export function createApp(storage: StorageProvider, env: any = {}) {
       })
       if (!response.ok) {
         metrics.recordError()
+        await auditLogger.log({
+          userId,
+          destination,
+          decision: 'failed',
+          reason: `upstream_status:${response.status}`,
+          purposesRequired: rule.category,
+          purposesGranted,
+          transformations: forward.report,
+        })
         return c.body(null, 502)
       }
+      metrics.recordRequest(destination, 'forwarded')
+      await auditLogger.log({
+        userId,
+        destination,
+        decision: 'forwarded',
+        reason: 'consent_granted',
+        purposesRequired: rule.category,
+        purposesGranted,
+        transformations: forward.report,
+      })
       return c.body(null, 204)
     } catch (error) {
       console.error(`[Sluice] Upstream forward failed for ${destination}:`, error)
       metrics.recordError()
+      await auditLogger.log({
+        userId,
+        destination,
+        decision: 'failed',
+        reason: 'upstream_unreachable',
+        purposesRequired: rule.category,
+        purposesGranted,
+        transformations: forward.report,
+      })
       return c.body(null, 502)
     }
   })
@@ -379,6 +351,51 @@ export function createApp(storage: StorageProvider, env: any = {}) {
 }
 
 // ---------- helpers ----------
+
+/**
+ * Turn an intercepted request into the concrete upstream call, scrubbed.
+ *
+ * Both the live ingest path and the buffer replay go through here, so the
+ * "scrub before egress, always" invariant lives in exactly one place. Every
+ * outcome that is not `ok` means the request is not forwarded.
+ */
+type BuildOutcome = { ok: true; forward: VendorForward } | { ok: false; reason: string }
+
+async function buildForward(ctx: VendorContext): Promise<BuildOutcome> {
+  const adapter = getAdapter(ctx.rule.id)
+
+  if (adapter) {
+    const result = await adapter.buildRequest(ctx)
+    if (!result) return { ok: false, reason: 'adapter_returned_null' }
+    if ('skip' in result) return { ok: false, reason: `adapter_skip:${result.reason}` }
+    return { ok: true, forward: result }
+  }
+
+  // No adapter → generic JSON passthrough. Only useful for testing; a real
+  // vendor needs a real adapter.
+  if (!ctx.rule.upstreamUrl) return { ok: false, reason: 'no_adapter_and_no_upstream_url' }
+
+  // A body we cannot parse is a body we cannot scrub, and an unscrubbed
+  // payload never goes upstream.
+  if (!ctx.jsonBody || typeof ctx.jsonBody !== 'object') {
+    return { ok: false, reason: 'unscrubbable_payload' }
+  }
+
+  const scrub = scrubPayload(ctx.jsonBody, ctx.rule)
+  return {
+    ok: true,
+    forward: {
+      url: ctx.originalUrl || ctx.rule.upstreamUrl,
+      method: ctx.method,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': ctx.headers['user-agent'] || 'Sluice Proxy',
+      },
+      body: JSON.stringify(scrub.payload),
+      report: scrub.report,
+    },
+  }
+}
 
 function requireAdmin(c: Context, config: ServerConfig): boolean {
   const auth = c.req.header('Authorization')
@@ -390,6 +407,12 @@ function requireAllowedOrigin(c: Context, config: ServerConfig): boolean {
   const origin = c.req.header('Origin')
   if (!origin) return true // non-browser callers (curl, server-to-server) are fine
   return config.allowedOrigins.includes(origin)
+}
+
+function lowercaseRecord(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers)) out[key.toLowerCase()] = value
+  return out
 }
 
 function lowercaseHeaders(c: Context): Record<string, string> {
@@ -420,7 +443,7 @@ async function replayBuffered(
     config: ServerConfig
   },
 ): Promise<number> {
-  const { consentManager, auditLogger, ruleManager, bufferManager } = deps
+  const { consentManager, auditLogger, ruleManager, bufferManager, config } = deps
   const buffered = await bufferManager.getAndClearBuffer(userId)
   if (buffered.length === 0) return 0
 
@@ -438,23 +461,60 @@ async function replayBuffered(
         })
         continue
       }
-      const targetUrl = req.originalUrl || rule.upstreamUrl
-      if (!targetUrl) continue
-      try {
-        const payload =
-          typeof req.payload === 'string'
-            ? req.payload
-            : JSON.stringify(scrubPayload(req.payload, rule))
-        await fetch(targetUrl, { method: req.method, headers: req.headers, body: payload })
+
+      // Replay goes through the same builder as the live path. A buffered
+      // payload we stored as a raw string has no JSON shape to scrub, so it is
+      // dropped rather than forwarded.
+      const isObject = !!req.payload && typeof req.payload === 'object'
+      const built = await buildForward({
+        method: req.method,
+        originalUrl: req.originalUrl || rule.upstreamUrl || '',
+        query: new URLSearchParams(),
+        headers: lowercaseRecord(req.headers),
+        jsonBody: isObject ? req.payload : null,
+        rawBody: typeof req.payload === 'string' ? req.payload : '',
+        rule,
+        serverConfig: config,
+      })
+
+      if (!built.ok) {
         await auditLogger.log({
           userId,
           destination: req.destination,
-          decision: 'forwarded',
-          reason: 'replayed_from_buffer',
+          decision: 'blocked',
+          reason: `replayed_${built.reason}`,
           purposesRequired: rule.category,
+        })
+        continue
+      }
+
+      const { forward } = built
+      try {
+        const response = await fetch(forward.url, {
+          method: forward.method,
+          headers: forward.headers,
+          body: forward.method === 'GET' || forward.method === 'HEAD' ? undefined : forward.body,
+        })
+        await auditLogger.log({
+          userId,
+          destination: req.destination,
+          decision: response.ok ? 'forwarded' : 'failed',
+          reason: response.ok
+            ? 'replayed_from_buffer'
+            : `replayed_upstream_status:${response.status}`,
+          purposesRequired: rule.category,
+          transformations: forward.report,
         })
       } catch (e) {
         console.error(`[Sluice] Replay failed for ${req.destination}:`, e)
+        await auditLogger.log({
+          userId,
+          destination: req.destination,
+          decision: 'failed',
+          reason: 'replayed_upstream_unreachable',
+          purposesRequired: rule.category,
+          transformations: forward.report,
+        })
       }
     }
   })()

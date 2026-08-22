@@ -50,3 +50,36 @@ export const IngestRequestSchema = z.object({
 })
 
 export type IngestRequest = z.infer<typeof IngestRequestSchema>
+
+/**
+ * Transformation Record Schema
+ * Evidence that one declared transformation actually fired against a payload.
+ * `matched` counts values changed — a wildcard path can exceed 1. Entries that
+ * matched nothing are never recorded, and the value itself is never stored.
+ */
+export const TransformationRecordSchema = z.object({
+  path: z.string(),
+  action: TransformationActionSchema,
+  matched: z.number().int().positive(),
+})
+
+export type TransformationRecord = z.infer<typeof TransformationRecordSchema>
+
+/**
+ * Audit Record Schema
+ * The per-request proof. Every field is derived from what happened, not from
+ * what a rule declared: `transformations` lists only what actually fired, and
+ * `decision` is written after the upstream call resolves.
+ */
+export const AuditRecordSchema = z.object({
+  timestamp: z.string(),
+  userId: z.string(),
+  destination: z.string(),
+  decision: z.enum(['forwarded', 'blocked', 'buffered', 'failed']),
+  reason: z.string(),
+  purposesRequired: z.string().optional(),
+  purposesGranted: z.array(z.string()).optional(),
+  transformations: z.array(TransformationRecordSchema).default([]),
+})
+
+export type AuditRecord = z.infer<typeof AuditRecordSchema>

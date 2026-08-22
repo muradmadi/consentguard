@@ -69,12 +69,18 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
 6. **Scrub + build** — a registered `VendorAdapter` translates the intercepted beacon
    into the vendor's server-side schema and calls `scrubPayload` itself. With no
    adapter, a generic JSON passthrough scrubs and forwards to `rule.upstreamUrl`.
-7. **Audit + metrics**, then forward upstream. Success → `204`, upstream failure → `502`.
+7. **Forward upstream**, then audit + metrics. Success → `204`, upstream failure → `502`.
+   The audit is written after the upstream call resolves, so `decision` states what
+   happened rather than what was intended.
 
 ### Where things live
 
 - **Transformation engine** — `engine/transformer.ts` walks a dotted path with `*` as an
-  array wildcard, dispatching to `engine/transformations/{strip,hash,redact}.ts`.
+  array wildcard, dispatching to `engine/transformations/{strip,hash,redact}.ts`. Each
+  primitive returns whether it fired; `scrubPayload` returns `{ payload, report }`.
+- **Forward builder** — `buildForward` in `app.ts` turns a request into the scrubbed
+  upstream call. Both the live path and buffer replay go through it, so the scrub-before-egress
+  rule lives in one place.
 - **Destination rules** — `destinations/<vendor>.ts`, registered in `destinations/registry.ts`.
   A rule is declarative: `id`, `category`, `endpoints`, optional `upstreamUrl`, `transformations[]`.
 - **Vendor adapters** — `destinations/adapters/<vendor>.ts`, registered in `adapters/index.ts`.
@@ -94,7 +100,11 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
   or they retry and degrade. `dangerouslyAllowOnError` is the single documented escape
   hatch and stays off by default.
 - **Scrub before egress, always.** No path may `fetch` a vendor with a payload that has
-  not been through `scrubPayload` or an adapter that calls it.
+  not been through `scrubPayload` or an adapter that calls it. A body that cannot be
+  parsed cannot be scrubbed, so it is blocked rather than forwarded.
+- **The audit is derived, never declared.** `transformations` comes from the `ScrubResult`
+  report — an entry means that transformation actually changed this payload. Never build
+  it from `rule.transformations`, and never record the removed value.
 
 ## Working in this repo
 

@@ -67,9 +67,10 @@ export const ga4Adapter: VendorAdapter = {
     const userId = params.get('uid')
     if (userId) mpPayload.user_id = userId
 
-    // Apply declarative rule transformations against the MP-shaped payload,
-    // then mark scrubbed so the caller skips the second pass.
-    mpPayload = scrubPayload(mpPayload, ctx.rule)
+    // Apply declarative rule transformations against the MP-shaped payload and
+    // carry the report out, so the audit reflects this scrub rather than the rule.
+    const scrub = scrubPayload(mpPayload, ctx.rule)
+    mpPayload = scrub.payload
 
     const url = `https://www.google-analytics.com/mp/collect?measurement_id=${encodeURIComponent(
       measurementId,
@@ -80,7 +81,7 @@ export const ga4Adapter: VendorAdapter = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(mpPayload),
-      scrubbed: true,
+      report: scrub.report,
     }
   },
 }

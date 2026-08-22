@@ -1,4 +1,4 @@
-import type { DestinationRule } from '@sluice/shared'
+import type { DestinationRule, TransformationRecord } from '@sluice/shared'
 import type { ServerConfig } from '../../config'
 
 /**
@@ -29,8 +29,12 @@ export interface VendorForward {
   method: string
   headers: Record<string, string>
   body: string
-  /** True if the adapter already applied its transformations. Skip the generic pass. */
-  scrubbed?: boolean
+  /**
+   * What the adapter's own scrub actually removed. Required: an adapter cannot
+   * hand back a forward without saying what it took out, because this is what
+   * the audit record is built from.
+   */
+  report: TransformationRecord[]
 }
 
 export type AdapterResult = VendorForward | null | { skip: true; reason: string }

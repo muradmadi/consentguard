@@ -3,19 +3,19 @@ import { getServerConfig } from '../../config'
 
 /**
  * Hash transformation: replaces a string value with its SHA-256 hash + salt.
- * Supports salt-based hashing for better privacy.
+ * Returns true if the field was a string and was hashed.
  */
-export const applyHash = (obj: any, head: string, env: any = process.env) => {
-  if (obj && typeof obj === 'object' && typeof obj[head] === 'string') {
-    // Priority: Environment Variable > Default Config > Static Fallback
-    const config = getServerConfig(env)
-    const salt = env.SLUICE_HASH_SALT || config.hashSalt || 'sluice-default-salt-12345'
+export const applyHash = (obj: any, head: string, env: any = process.env): boolean => {
+  if (!obj || typeof obj !== 'object' || typeof obj[head] !== 'string') return false
 
-    // Convert to lowercase before hashing (industry standard for email/PII hashing)
-    const normalized = obj[head].trim().toLowerCase()
+  // Priority: Environment Variable > Default Config > Static Fallback
+  const config = getServerConfig(env)
+  const salt = env.SLUICE_HASH_SALT || config.hashSalt || 'sluice-default-salt-12345'
 
-    obj[head] = createHash('sha256').update(`${normalized}${salt}`).digest('hex')
+  // Convert to lowercase before hashing (industry standard for email/PII hashing)
+  const normalized = obj[head].trim().toLowerCase()
 
-    // console.log(`[Sluice] Hashed field: ${head}`);
-  }
+  obj[head] = createHash('sha256').update(`${normalized}${salt}`).digest('hex')
+
+  return true
 }

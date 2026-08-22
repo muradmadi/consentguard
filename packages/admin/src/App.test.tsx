@@ -18,14 +18,16 @@ const logs = [
     destination: 'ga4',
     decision: 'forwarded',
     reason: 'consent granted',
-    timestamp: 1_700_000_000_000,
+    timestamp: '2026-08-22T10:00:00.000Z',
+    transformations: [{ path: 'user_id', action: 'hash', matched: 1 }],
   },
   {
     userId: 'u_zzzzzz999999',
     destination: 'mixpanel',
     decision: 'blocked',
     reason: 'no consent',
-    timestamp: 1_700_000_001_000,
+    timestamp: '2026-08-22T10:00:01.000Z',
+    transformations: [],
   },
 ]
 
@@ -74,6 +76,14 @@ describe('App', () => {
       expect(screen.getByText('u_abcdef123456')).toBeDefined()
       expect(screen.getByText('u_zzzzzz999999')).toBeDefined()
     })
+  })
+
+  it('shows a scrub indicator only for records that carry transformation evidence', async () => {
+    render(<App />)
+    // The forwarded ga4 record scrubbed one field; the blocked mixpanel record
+    // scrubbed nothing and must not be labelled as though it had.
+    await waitFor(() => expect(screen.getAllByText('1 scrubbed').length).toBeGreaterThan(0))
+    expect(screen.queryByText('0 scrubbed')).toBeNull()
   })
 
   it('survives an API failure without crashing', async () => {

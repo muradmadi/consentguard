@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@sluice/server": "*",
+    "@sluice/shared": "*",
     "commander": "^15.0.0",
     "picocolors": "^1.0.0",
     "prompts": "^2.4.2"

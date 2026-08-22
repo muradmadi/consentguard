@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createApp } from './app'
 import { MemoryStorageProvider } from './engine/storage'
 
@@ -179,6 +179,156 @@ describe('Sluice server', () => {
         body: JSON.stringify({}),
       })
       expect(res.status).toBe(204)
+    })
+  })
+
+  /**
+   * The audit record is the product's only evidentiary artifact. These tests
+   * exist because it used to be assembled from the declared rule rather than
+   * from the payload, so it reported scrubbing that never happened.
+   */
+  describe('/ingest audit evidence', () => {
+    const SINK = 'https://sink.example.com/collect'
+    let upstream: ReturnType<typeof vi.fn>
+    let realFetch: typeof globalThis.fetch
+
+    /** A destination with no adapter, so the generic passthrough path runs. */
+    async function seed(app: ReturnType<typeof createApp>) {
+      await app.request('/api/rules/testvendor', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify({
+          id: 'testvendor',
+          category: 'analytics',
+          endpoints: [],
+          upstreamUrl: SINK,
+          transformations: [
+            { path: 'email', action: 'strip' },
+            { path: 'phone', action: 'hash' },
+          ],
+        }),
+      })
+      await app.request('/consent/clean-user', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify({ purposes: { analytics: true }, timestamp: Date.now() }),
+      })
+    }
+
+    function send(app: ReturnType<typeof createApp>, payload: unknown) {
+      return app.request('/ingest/testvendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'clean-user' },
+        body: JSON.stringify(payload),
+      })
+    }
+
+    async function latestAudit(app: ReturnType<typeof createApp>) {
+      const res = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
+      return ((await res.json()) as any[])[0]
+    }
+
+    beforeEach(() => {
+      realFetch = globalThis.fetch
+      upstream = vi.fn(async () => new Response(null, { status: 200 }))
+      globalThis.fetch = upstream as unknown as typeof fetch
+    })
+
+    afterEach(() => {
+      globalThis.fetch = realFetch
+    })
+
+    it('reports no transformations when the declared fields are absent', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await send(app, { event: 'page_view', plan: 'pro' })
+      expect(res.status).toBe(204)
+
+      const entry = await latestAudit(app)
+      expect(entry.decision).toBe('forwarded')
+      expect(entry.transformations).toEqual([])
+    })
+
+    it('reports exactly the transformations that fired', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await send(app, { event: 'purchase', email: 'alice@example.com', phone: '555-1234' })
+
+      const entry = await latestAudit(app)
+      expect(entry.decision).toBe('forwarded')
+      expect(entry.transformations).toEqual([
+        { path: 'email', action: 'strip', matched: 1 },
+        { path: 'phone', action: 'hash', matched: 1 },
+      ])
+    })
+
+    it('forwards a payload with the personal data actually removed', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await send(app, { event: 'purchase', email: 'alice@example.com', phone: '555-1234' })
+
+      expect(upstream).toHaveBeenCalledTimes(1)
+      const body = JSON.parse((upstream.mock.calls[0][1] as RequestInit).body as string)
+      expect(body.email).toBeUndefined()
+      expect(body.phone).toMatch(/^[0-9a-f]{64}$/)
+      expect(body.event).toBe('purchase')
+    })
+
+    it('never writes the removed value into the audit record', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await send(app, { email: 'alice@example.com', phone: '555-1234' })
+
+      const entry = await latestAudit(app)
+      expect(JSON.stringify(entry)).not.toContain('alice@example.com')
+    })
+
+    it('records failed, not forwarded, when the upstream rejects', async () => {
+      upstream.mockResolvedValue(new Response(null, { status: 500 }))
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await send(app, { email: 'alice@example.com' })
+      expect(res.status).toBe(502)
+
+      const entry = await latestAudit(app)
+      expect(entry.decision).toBe('failed')
+      expect(entry.reason).toBe('upstream_status:500')
+      expect(entry.transformations).toEqual([{ path: 'email', action: 'strip', matched: 1 }])
+    })
+
+    it('records failed when the upstream is unreachable', async () => {
+      upstream.mockRejectedValue(new Error('connection refused'))
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await send(app, { event: 'page_view' })
+      expect(res.status).toBe(502)
+      expect((await latestAudit(app)).decision).toBe('failed')
+    })
+
+    it('refuses to forward a body it cannot parse and therefore cannot scrub', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await app.request('/ingest/testvendor', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Consent-UserId': 'clean-user',
+        },
+        body: 'email=alice@example.com&event=page_view',
+      })
+
+      expect(res.status).toBe(204)
+      expect(upstream).not.toHaveBeenCalled()
+      const entry = await latestAudit(app)
+      expect(entry.decision).toBe('blocked')
+      expect(entry.reason).toBe('unscrubbable_payload')
     })
   })
 
