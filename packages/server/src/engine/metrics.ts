@@ -63,19 +63,19 @@ export class MetricsCollector {
    * Returns metrics in a pseudo-Prometheus format
    */
   public toPrometheus() {
-    let output = '# HELP consentguard_requests_total Total requests processed by ConsentGuard\n';
-    output += '# TYPE consentguard_requests_total counter\n';
+    let output = '# HELP sluice_requests_total Total requests processed by Sluice\n';
+    output += '# TYPE sluice_requests_total counter\n';
     
     for (const [key, value] of Object.entries(this.metrics.requestsTotal)) {
       const [dest, decision] = key.split(':');
-      output += `consentguard_requests_total{destination="${dest}", decision="${decision}"} ${value}\n`;
+      output += `sluice_requests_total{destination="${dest}", decision="${decision}"} ${value}\n`;
     }
 
-    output += `\n# HELP consentguard_errors_total Total upstream errors\n`;
-    output += `consentguard_errors_total ${this.metrics.errors}\n`;
+    output += `\n# HELP sluice_errors_total Total upstream errors\n`;
+    output += `sluice_errors_total ${this.metrics.errors}\n`;
 
-    output += `\n# HELP consentguard_uptime_seconds Uptime in seconds\n`;
-    output += `consentguard_uptime_seconds ${Math.floor((Date.now() - this.metrics.startTime) / 1000)}\n`;
+    output += `\n# HELP sluice_uptime_seconds Uptime in seconds\n`;
+    output += `sluice_uptime_seconds ${Math.floor((Date.now() - this.metrics.startTime) / 1000)}\n`;
 
     return output;
   }

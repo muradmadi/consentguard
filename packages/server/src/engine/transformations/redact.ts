@@ -8,7 +8,7 @@ export const applyRedact = (obj: any, head: string, pattern?: string) => {
         const regex = new RegExp(pattern, 'gi');
         obj[head] = obj[head].replace(regex, '[REDACTED]');
       } catch (e) {
-        console.warn(`[ConsentGuard] Invalid regex pattern for redaction: ${pattern}`);
+        console.warn(`[Sluice] Invalid regex pattern for redaction: ${pattern}`);
         obj[head] = '[REDACTED]';
       }
     } else {

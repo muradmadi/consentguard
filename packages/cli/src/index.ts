@@ -9,15 +9,15 @@ import { spawn } from 'child_process';
 const program = new Command();
 
 program
-  .name('consentguard')
-  .description('ConsentGuard CLI - Manage your privacy proxy')
+  .name('sluice')
+  .description('Sluice CLI - Manage your privacy proxy')
   .version('0.1.0');
 
 program
   .command('init')
-  .description('Initialize a new ConsentGuard configuration')
+  .description('Initialize a new Sluice configuration')
   .action(async () => {
-    console.log(pc.cyan('🛡️  ConsentGuard Initialization\n'));
+    console.log(pc.cyan('🛡️  Sluice Initialization\n'));
 
     const response = await prompts([
       {
@@ -53,9 +53,9 @@ program
       allowedOrigins: (response.allowedOrigins || '').split(',').map((s: string) => s.trim()).filter(Boolean),
     };
 
-    const configPath = path.join(process.cwd(), '.consentguardrc.json');
+    const configPath = path.join(process.cwd(), '.sluicerc.json');
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-    console.log(pc.green(`\nCreated ${pc.bold('.consentguardrc.json')}`));
+    console.log(pc.green(`\nCreated ${pc.bold('.sluicerc.json')}`));
 
     const generateProduction = await prompts({
       type: 'confirm',
@@ -76,8 +76,8 @@ program
         `      - PORT=${config.port}`,
         '      - REDIS_URL=redis://redis:6379',
         `      - ADMIN_SECRET=${config.adminSecret}`,
-        `      - CG_ALLOWED_ORIGINS=${originsEnv}`,
-        '      - CG_ENABLE_CACHE=true',
+        `      - SLUICE_ALLOWED_ORIGINS=${originsEnv}`,
+        '      - SLUICE_ENABLE_CACHE=true',
         '      - GA4_MEASUREMENT_ID=',
         '      - GA4_API_SECRET=',
         '    depends_on:',
@@ -94,15 +94,15 @@ program
       console.log(pc.green(`Created ${pc.bold('docker-compose.yml')}`));
     }
 
-    console.log(pc.dim('\nYou can now run: ') + pc.bold('consentguard start'));
+    console.log(pc.dim('\nYou can now run: ') + pc.bold('sluice start'));
   });
 
 program
   .command('start')
-  .description('Start the ConsentGuard proxy server')
+  .description('Start the Sluice proxy server')
   .option('-p, --port <number>', 'Port to run on')
   .action((options) => {
-    console.log(pc.cyan('🛡️  Starting ConsentGuard Proxy...\n'));
+    console.log(pc.cyan('🛡️  Starting Sluice Proxy...\n'));
 
     // In a real CLI, we would import the server and run it.
     // For now, we'll spawn the node process pointing to the server's index.
@@ -130,15 +130,15 @@ program
 
 program
   .command('dashboard')
-  .description('Open the ConsentGuard Admin Dashboard')
+  .description('Open the Sluice Admin Dashboard')
   .action(() => {
-    console.log(pc.cyan('🛡️  Launching ConsentGuard Dashboard...\n'));
+    console.log(pc.cyan('🛡️  Launching Sluice Dashboard...\n'));
     
     // For now, we'll just print the URL and instructions.
     // In a full implementation, we might start a separate process or serve it from the proxy.
-    console.log(pc.white('1. Ensure the proxy is running: ') + pc.bold('consentguard start'));
+    console.log(pc.white('1. Ensure the proxy is running: ') + pc.bold('sluice start'));
     console.log(pc.white('2. Open the dashboard: ') + pc.underline(pc.blue('http://localhost:3000/dashboard')));
-    console.log(pc.dim('\nTip: Use the ADMIN_SECRET from your .consentguardrc.json to log in.'));
+    console.log(pc.dim('\nTip: Use the ADMIN_SECRET from your .sluicerc.json to log in.'));
   });
 
 program
@@ -147,7 +147,7 @@ program
   .option('-u, --url <url>', 'Proxy URL', 'http://localhost:3000')
   .option('-s, --secret <secret>', 'Admin Secret')
   .action(async (options) => {
-    console.log(pc.cyan('🛡️  Streaming ConsentGuard Logs... (Ctrl+C to stop)\n'));
+    console.log(pc.cyan('🛡️  Streaming Sluice Logs... (Ctrl+C to stop)\n'));
     
     let lastTimestamp = '';
     const secret = options.secret || process.env.ADMIN_SECRET || 'dev-admin-secret';
@@ -186,11 +186,11 @@ program
 
 program
   .command('status')
-  .description('Check the health and status of ConsentGuard components')
+  .description('Check the health and status of Sluice components')
   .option('-u, --url <url>', 'Proxy URL', 'http://localhost:3000')
   .option('-s, --secret <secret>', 'Admin Secret')
   .action(async (options) => {
-    console.log(pc.cyan('🛡️  ConsentGuard System Status\n'));
+    console.log(pc.cyan('🛡️  Sluice System Status\n'));
     
     const secret = options.secret || process.env.ADMIN_SECRET || 'dev-admin-secret';
 
@@ -244,7 +244,7 @@ program
       }
     } catch (e) {}
 
-    console.log(pc.dim('\nUse "consentguard logs" to see real-time traffic.'));
+    console.log(pc.dim('\nUse "sluice logs" to see real-time traffic.'));
   });
 
 program.parse();

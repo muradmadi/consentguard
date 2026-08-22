@@ -3,7 +3,7 @@ import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { getCookie, setCookie } from 'hono/cookie'
 import { serveStatic } from '@hono/node-server/serve-static'
-import { ConsentStateSchema } from '@consentguard/shared'
+import { ConsentStateSchema } from '@sluice/shared'
 import { ConsentManager } from './engine/consent'
 import { scrubPayload } from './engine/transformer'
 import { metrics } from './engine/metrics'
@@ -36,15 +36,15 @@ export function createApp(storage: StorageProvider, env: any = {}) {
   const isServerSubdir = normalizedCwd.endsWith('/packages/server') || normalizedCwd.endsWith('/server')
   const adminDistPath = isServerSubdir ? '../admin/dist' : './packages/admin/dist'
   const clientBundlePath = isServerSubdir
-    ? '../client/dist/consentguard.iife.js'
-    : './packages/client/dist/consentguard.iife.js'
+    ? '../client/dist/sluice.iife.js'
+    : './packages/client/dist/sluice.iife.js'
 
   app.use('/dashboard/*', serveStatic({
     root: adminDistPath,
     rewriteRequestPath: (path) => path.replace(/^\/dashboard/, ''),
   }))
   app.get('/dashboard', (c) => c.redirect('/dashboard/index.html'))
-  app.use('/consentguard-client.js', serveStatic({ path: clientBundlePath }))
+  app.use('/sluice-client.js', serveStatic({ path: clientBundlePath }))
 
   // CORS: browser calls to /ingest and /consent/self must send credentials
   // (the cuid cookie). We reflect the request's origin only when it's in the
@@ -175,7 +175,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
   /**
    * Analytics ingestion. No shared secret — the browser cannot hold one
    * securely. Instead we require:
-   *   - the request's Origin to be in CG_ALLOWED_ORIGINS (or the list is empty in dev)
+   *   - the request's Origin to be in SLUICE_ALLOWED_ORIGINS (or the list is empty in dev)
    *   - a resolvable user id (header, cookie, or query param)
    *   - a destination the registry (or override) knows about
    */
@@ -187,7 +187,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     const userId = c.req.header('X-Consent-UserId')
       || getCookie(c, 'cuid')
       || c.req.query('cuid')
-      || c.req.query('cg_user_id')
+      || c.req.query('sluice_user_id')
 
     if (!userId) {
       metrics.recordRequest(destination, 'blocked')
@@ -222,7 +222,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
           method: c.req.method,
           headers: {
             'Content-Type': c.req.header('Content-Type') || 'application/json',
-            'User-Agent': c.req.header('User-Agent') || 'ConsentGuard Proxy',
+            'User-Agent': c.req.header('User-Agent') || 'Sluice Proxy',
           },
           originalUrl: c.req.header('X-Original-Url') || rule.upstreamUrl,
         })
@@ -294,7 +294,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
         method: c.req.method,
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': c.req.header('User-Agent') || 'ConsentGuard Proxy',
+          'User-Agent': c.req.header('User-Agent') || 'Sluice Proxy',
         },
         body: JSON.stringify(scrubbed),
       }
@@ -335,7 +335,7 @@ export function createApp(storage: StorageProvider, env: any = {}) {
       }
       return c.body(null, 204)
     } catch (error) {
-      console.error(`[ConsentGuard] Upstream forward failed for ${destination}:`, error)
+      console.error(`[Sluice] Upstream forward failed for ${destination}:`, error)
       metrics.recordError()
       return c.body(null, 502)
     }
@@ -415,7 +415,7 @@ async function replayBuffered(
           purposesRequired: rule.category,
         })
       } catch (e) {
-        console.error(`[ConsentGuard] Replay failed for ${req.destination}:`, e)
+        console.error(`[Sluice] Replay failed for ${req.destination}:`, e)
       }
     }
   })()

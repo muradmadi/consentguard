@@ -5,8 +5,8 @@ export default defineConfig({
   build: {
     lib: {
       entry: resolve(__dirname, 'src/index.ts'),
-      name: 'ConsentGuard',
-      fileName: (format) => `consentguard.${format}.js`,
+      name: 'Sluice',
+      fileName: (format) => `sluice.${format}.js`,
       formats: ['es', 'cjs', 'iife'],
     },
     minify: 'esbuild',

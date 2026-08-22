@@ -13,7 +13,7 @@ export interface AuditRecord {
 
 export class AuditLogger {
   private storage: StorageProvider;
-  private readonly KEY = 'cg_audit_trail';
+  private readonly KEY = 'sluice_audit_trail';
   private readonly MAX_ENTRIES = 1000;
 
   constructor(storage: StorageProvider) {
@@ -33,7 +33,7 @@ export class AuditLogger {
       await this.storage.lpush(this.KEY, JSON.stringify(fullRecord));
       await this.storage.ltrim(this.KEY, 0, this.MAX_ENTRIES - 1);
     } catch (error) {
-      console.error('[ConsentGuard] Audit logging failed:', error);
+      console.error('[Sluice] Audit logging failed:', error);
     }
   }
 

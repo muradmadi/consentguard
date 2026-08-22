@@ -1,8 +1,8 @@
 /**
- * ConsentGuard Client Interceptor
+ * Sluice Client Interceptor
  *
  * Patches global networking primitives to reroute analytics requests
- * through the ConsentGuard proxy. Exposes window.ConsentGuard.setConsent()
+ * through the Sluice proxy. Exposes window.Sluice.setConsent()
  * so your consent banner can grant/revoke purposes without embedding
  * any server secret in the browser bundle.
  */
@@ -60,14 +60,14 @@ function setCookie(name: string, value: string, days = 365) {
 
 function getConfigFromMeta(): Partial<ClientConfig> {
   if (typeof document === 'undefined') return {};
-  const meta = document.querySelector('meta[name="consentguard-config"]');
+  const meta = document.querySelector('meta[name="sluice-config"]');
   if (!meta) return {};
   const content = meta.getAttribute('content');
   if (!content) return {};
   try {
     return JSON.parse(content);
   } catch (e) {
-    console.error('[ConsentGuard] Failed to parse config from meta tag:', e);
+    console.error('[Sluice] Failed to parse config from meta tag:', e);
     return {};
   }
 }
@@ -91,7 +91,7 @@ function getOrSetUserId(config: ResolvedConfig): string {
   const existing = getCookie(cookieName);
   if (existing) return existing;
 
-  const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('cg_user_id') : null;
+  const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('sluice_user_id') : null;
   if (stored) {
     setCookie(cookieName, stored);
     return stored;
@@ -102,7 +102,7 @@ function getOrSetUserId(config: ResolvedConfig): string {
     : 'u_' + Math.random().toString(36).substring(2, 15);
 
   setCookie(cookieName, id);
-  if (typeof localStorage !== 'undefined') localStorage.setItem('cg_user_id', id);
+  if (typeof localStorage !== 'undefined') localStorage.setItem('sluice_user_id', id);
   return id;
 }
 
@@ -152,7 +152,7 @@ export function init(config?: Partial<ClientConfig>) {
   const ingestBase = `${proxyBase}/ingest`;
 
   // Expose the public API. No secrets involved.
-  (window as any).ConsentGuard = {
+  (window as any).Sluice = {
     userId,
     proxyBase,
     setConsent: (purposes: Record<string, boolean>) => setConsent(purposes, proxyBase, userId),
@@ -203,7 +203,7 @@ export function init(config?: Partial<ClientConfig>) {
 
       return fallbackOrOpaque(originalFetch, input, initOpts, resolved.dangerouslyAllowOnError, url);
     } catch (err) {
-      console.error('[ConsentGuard] Proxy unreachable:', err);
+      console.error('[Sluice] Proxy unreachable:', err);
       return fallbackOrOpaque(originalFetch, input, initOpts, resolved.dangerouslyAllowOnError, url);
     }
   };
@@ -217,21 +217,21 @@ export function init(config?: Partial<ClientConfig>) {
     const urlStr = url.toString();
     const destination = !stopRerouting ? matchDestination(urlStr, activeDestinations) : null;
     if (destination) {
-      this._cgDestination = destination;
-      this._cgOriginalUrl = urlStr;
+      this._sluiceDestination = destination;
+      this._sluiceOriginalUrl = urlStr;
       return originalOpen.apply(this, [method, proxyUrlFor(destination), ...rest] as any);
     }
     return originalOpen.apply(this, [method, url, ...rest] as any);
   };
 
   XHR.send = function (body?: Document | XMLHttpRequestBodyInit | null) {
-    if (!this._cgDestination) {
+    if (!this._sluiceDestination) {
       return originalSend.apply(this, [body]);
     }
 
     try {
       this.setRequestHeader('X-Consent-UserId', userId);
-      if (this._cgOriginalUrl) this.setRequestHeader('X-Original-Url', this._cgOriginalUrl);
+      if (this._sluiceOriginalUrl) this.setRequestHeader('X-Original-Url', this._sluiceOriginalUrl);
 
       const self = this;
       const shim = () => {
@@ -247,13 +247,13 @@ export function init(config?: Partial<ClientConfig>) {
       };
       this.addEventListener('readystatechange', shim);
     } catch (err) {
-      console.error('[ConsentGuard] Error patching XHR headers:', err);
+      console.error('[Sluice] Error patching XHR headers:', err);
     }
 
     try {
       return originalSend.apply(this, [body]);
     } catch (err) {
-      console.error('[ConsentGuard] XHR send error:', err);
+      console.error('[Sluice] XHR send error:', err);
       const self = this;
       setTimeout(() => {
         Object.defineProperty(self, 'readyState', { get: () => 4, configurable: true });
@@ -277,7 +277,7 @@ export function init(config?: Partial<ClientConfig>) {
         finalUrl.searchParams.set('original', urlStr);
         return originalSendBeacon(finalUrl.toString(), data);
       } catch (err) {
-        console.error('[ConsentGuard] Beacon routing error:', err);
+        console.error('[Sluice] Beacon routing error:', err);
         return resolved.dangerouslyAllowOnError ? originalSendBeacon(url, data) : true;
       }
     };
@@ -312,8 +312,8 @@ function observeMutations(getDestination: (url: string) => string | null) {
         const destination = getDestination(script.src);
         if (!destination) return;
         script.type = 'text/plain';
-        script.setAttribute('data-consentguard-blocked', 'true');
-        script.setAttribute('data-consentguard-destination', destination);
+        script.setAttribute('data-sluice-blocked', 'true');
+        script.setAttribute('data-sluice-destination', destination);
       });
     });
   });
@@ -322,22 +322,22 @@ function observeMutations(getDestination: (url: string) => string | null) {
 
 declare global {
   interface XMLHttpRequest {
-    _cgDestination?: string;
-    _cgOriginalUrl?: string;
+    _sluiceDestination?: string;
+    _sluiceOriginalUrl?: string;
   }
   interface Window {
-    ConsentGuard?: {
+    Sluice?: {
       userId: string;
       proxyBase: string;
       setConsent: (purposes: Record<string, boolean>) => Promise<{ ok: boolean; replayed?: number; error?: string }>;
     };
-    __consentGuardConfig?: Partial<ClientConfig>;
+    __sluiceConfig?: Partial<ClientConfig>;
   }
 }
 
 // Auto-init when loaded as a bundle in the browser.
 if (typeof window !== 'undefined') {
   const metaConfig = getConfigFromMeta();
-  const windowConfig = window.__consentGuardConfig || {};
+  const windowConfig = window.__sluiceConfig || {};
   init({ ...metaConfig, ...windowConfig });
 }

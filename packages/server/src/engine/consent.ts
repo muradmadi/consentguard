@@ -1,4 +1,4 @@
-import { ConsentState, ConsentStateSchema } from '@consentguard/shared';
+import { ConsentState, ConsentStateSchema } from '@sluice/shared';
 import { StorageProvider } from './storage';
 
 export class ConsentManager {
@@ -27,13 +27,13 @@ export class ConsentManager {
       const result = ConsentStateSchema.safeParse(parsed);
       
       if (!result.success) {
-        console.warn(`[ConsentGuard] Invalid consent state for user ${userId}, falling back to default.`);
+        console.warn(`[Sluice] Invalid consent state for user ${userId}, falling back to default.`);
         return { ...this.getDefaultConsent(userId), _exists: false };
       }
 
       return { ...result.data, _exists: true };
     } catch (error) {
-      console.error(`[ConsentGuard] Error fetching/parsing consent state for user ${userId}, failing closed:`, error);
+      console.error(`[Sluice] Error fetching/parsing consent state for user ${userId}, failing closed:`, error);
       return { ...this.getDefaultConsent(userId), _exists: false };
     }
   }

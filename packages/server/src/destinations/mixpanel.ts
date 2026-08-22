@@ -1,4 +1,4 @@
-import { DestinationRule } from '@consentguard/shared';
+import { DestinationRule } from '@sluice/shared';
 
 export const mixpanel: DestinationRule = {
   id: 'mixpanel',

@@ -1,4 +1,4 @@
-import { DestinationRule } from '@consentguard/shared';
+import { DestinationRule } from '@sluice/shared';
 import { ga4 } from './ga4';
 import { mixpanel } from './mixpanel';
 import { amplitude } from './amplitude';

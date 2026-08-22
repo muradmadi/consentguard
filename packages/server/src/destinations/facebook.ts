@@ -1,4 +1,4 @@
-import { DestinationRule } from '@consentguard/shared';
+import { DestinationRule } from '@sluice/shared';
 
 export const facebook: DestinationRule = {
   id: 'facebook_pixel',

@@ -3,7 +3,7 @@ import { ConsentManager } from '../engine/consent';
 import { StorageProvider } from '../engine/storage';
 import { OneTrustAdapter, CookiebotAdapter } from './adapters';
 import { CMPAdapter } from './adapters/types';
-import { ConsentState } from '@consentguard/shared';
+import { ConsentState } from '@sluice/shared';
 import { ServerConfig } from '../config';
 
 export function createWebhookRouter(
@@ -33,7 +33,7 @@ export function createWebhookRouter(
       c.req.header('Authorization')?.replace('Bearer ', '');
 
     if (!clientSecret || clientSecret !== webhookSecret) {
-      console.warn(`[ConsentGuard] Unauthorized CMP webhook attempt for ${provider}`);
+      console.warn(`[Sluice] Unauthorized CMP webhook attempt for ${provider}`);
       return c.json({ error: 'Unauthorized' }, 401);
     }
 
@@ -46,7 +46,7 @@ export function createWebhookRouter(
       return c.json({ error: 'User ID not found in payload' }, 400);
     }
 
-    console.log(`[ConsentGuard] Processing ${provider} webhook for user ${userId}`);
+    console.log(`[Sluice] Processing ${provider} webhook for user ${userId}`);
 
     const state: ConsentState = {
       userId,
@@ -60,7 +60,7 @@ export function createWebhookRouter(
     if (onConsentUpdated) {
       // Fire and forget
       onConsentUpdated(userId, state).catch(err => {
-        console.error(`[ConsentGuard] Error in onConsentUpdated callback:`, err);
+        console.error(`[Sluice] Error in onConsentUpdated callback:`, err);
       });
     }
 

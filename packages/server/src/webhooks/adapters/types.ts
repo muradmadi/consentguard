@@ -1,4 +1,4 @@
-import { ConsentState } from '@consentguard/shared';
+import { ConsentState } from '@sluice/shared';
 
 export interface CMPAdapter {
   /**
@@ -7,7 +7,7 @@ export interface CMPAdapter {
   getUserId(payload: any): string | undefined;
 
   /**
-   * Map the provider's payload to ConsentGuard's purpose categories.
+   * Map the provider's payload to Sluice's purpose categories.
    */
   getPurposes(payload: any): Record<string, boolean>;
 

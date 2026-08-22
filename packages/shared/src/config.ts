@@ -1,4 +1,4 @@
-export interface ConsentGuardConfig {
+export interface SluiceConfig {
   redis: {
     url: string
     keyPrefix: string
@@ -13,10 +13,10 @@ export interface ConsentGuardConfig {
   destinations: Record<string, any>
 }
 
-export const defaultConfig: ConsentGuardConfig = {
+export const defaultConfig: SluiceConfig = {
   redis: {
     url: 'redis://127.0.0.1:6379',
-    keyPrefix: 'cg_',
+    keyPrefix: 'sluice_',
     cacheTimeout: 5000,
   },
   proxy: {

@@ -1,4 +1,4 @@
-import type { DestinationRule } from '@consentguard/shared';
+import type { DestinationRule } from '@sluice/shared';
 import type { ServerConfig } from '../../config';
 
 /**

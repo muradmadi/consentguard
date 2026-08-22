@@ -1,4 +1,4 @@
-import { DestinationRule } from '@consentguard/shared';
+import { DestinationRule } from '@sluice/shared';
 
 /**
  * GA4 uses a real vendor adapter (see ./adapters/ga4.ts) that translates

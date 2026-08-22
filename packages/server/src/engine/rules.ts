@@ -1,4 +1,4 @@
-import { DestinationRule, DestinationRuleSchema } from '@consentguard/shared';
+import { DestinationRule, DestinationRuleSchema } from '@sluice/shared';
 import { StorageProvider } from './storage';
 import * as registry from '../destinations/registry';
 
@@ -33,9 +33,9 @@ export class RuleManager {
         if (result.success) {
           return result.data;
         }
-        console.warn(`[ConsentGuard] Invalid rule override for ${id}, falling back to registry.`);
+        console.warn(`[Sluice] Invalid rule override for ${id}, falling back to registry.`);
       } catch (e) {
-        console.error(`[ConsentGuard] Error parsing rule override for ${id}:`, e);
+        console.error(`[Sluice] Error parsing rule override for ${id}:`, e);
       }
     }
 

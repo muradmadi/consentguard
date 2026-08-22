@@ -1,9 +1,9 @@
 {
-  "name": "@consentguard/client",
-  "version": "0.1.0",
-  "main": "dist/consentguard.cjs.js",
-  "module": "dist/consentguard.esm.js",
-  "unpkg": "dist/consentguard.iife.js",
+  "name": "@sluice/client",
+  "version": "0.0.0-dev",
+  "main": "dist/sluice.cjs.js",
+  "module": "dist/sluice.esm.js",
+  "unpkg": "dist/sluice.iife.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "vite build && tsc --emitDeclarationOnly",

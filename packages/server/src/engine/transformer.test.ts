@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { scrubPayload } from './transformer';
-import { DestinationRule } from '@consentguard/shared';
+import { DestinationRule } from '@sluice/shared';
 
 function rule(transformations: DestinationRule['transformations']): DestinationRule {
   return { id: 'test', category: 'analytics', endpoints: [], transformations };

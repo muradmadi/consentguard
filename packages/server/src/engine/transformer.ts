@@ -1,4 +1,4 @@
-import { DestinationRule, TransformationAction } from '@consentguard/shared';
+import { DestinationRule, TransformationAction } from '@sluice/shared';
 import { applyStrip } from './transformations/strip';
 import { applyHash } from './transformations/hash';
 import { applyRedact } from './transformations/redact';

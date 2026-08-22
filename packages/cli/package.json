@@ -1,9 +1,9 @@
 {
-  "name": "@consentguard/cli",
-  "version": "0.1.0",
+  "name": "@sluice/cli",
+  "version": "0.0.0-dev",
   "main": "dist/index.js",
   "bin": {
-    "consentguard": "dist/index.js"
+    "sluice": "dist/index.js"
   },
   "scripts": {
     "build": "tsup",
@@ -12,7 +12,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@consentguard/server": "*",
+    "@sluice/server": "*",
     "commander": "^12.0.0",
     "picocolors": "^1.0.0",
     "prompts": "^2.4.2"

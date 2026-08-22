@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { X, Plus, Trash2, Save } from 'lucide-react'
-import type { DestinationRule } from '@consentguard/shared'
+import type { DestinationRule } from '@sluice/shared'
 
 interface RuleEditorProps {
   rule: DestinationRule

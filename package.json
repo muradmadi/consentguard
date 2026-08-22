@@ -1,5 +1,5 @@
 {
-  "name": "consentguard-monorepo",
+  "name": "sluice-monorepo",
   "private": true,
   "workspaces": [
     "packages/*"

@@ -5,7 +5,7 @@ import { MemoryStorageProvider } from './engine/storage';
 const DEV_ENV = {
   NODE_ENV: 'test',
   ADMIN_SECRET: 'test-admin',
-  CG_DEFAULT_CONSENT: 'deny',
+  SLUICE_DEFAULT_CONSENT: 'deny',
   BUFFER_PENDING: 'false',
 };
 
@@ -13,7 +13,7 @@ function withAllowedOrigin(origin: string, base?: HeadersInit): HeadersInit {
   return { ...(base || {}), Origin: origin };
 }
 
-describe('ConsentGuard server', () => {
+describe('Sluice server', () => {
   let storage: MemoryStorageProvider;
 
   beforeEach(() => {
@@ -90,7 +90,7 @@ describe('ConsentGuard server', () => {
 
   describe('/ingest origin allowlist', () => {
     it('rejects requests whose Origin is not in the allowlist', async () => {
-      const app = createApp(storage, { ...DEV_ENV, CG_ALLOWED_ORIGINS: 'https://app.example.com' });
+      const app = createApp(storage, { ...DEV_ENV, SLUICE_ALLOWED_ORIGINS: 'https://app.example.com' });
       const res = await app.request('/ingest/ga4', {
         method: 'POST',
         headers: withAllowedOrigin('https://evil.example.com', {
@@ -103,7 +103,7 @@ describe('ConsentGuard server', () => {
     });
 
     it('accepts requests from an allowed origin', async () => {
-      const app = createApp(storage, { ...DEV_ENV, CG_ALLOWED_ORIGINS: 'https://app.example.com' });
+      const app = createApp(storage, { ...DEV_ENV, SLUICE_ALLOWED_ORIGINS: 'https://app.example.com' });
       const res = await app.request('/ingest/ga4', {
         method: 'POST',
         headers: withAllowedOrigin('https://app.example.com', {

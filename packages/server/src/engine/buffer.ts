@@ -12,7 +12,7 @@ export interface BufferedRequest {
 
 export class BufferManager {
   private storage: StorageProvider;
-  private readonly PREFIX = 'cg_buffer:';
+  private readonly PREFIX = 'sluice_buffer:';
   private readonly TTL = 3600; // 1 hour
 
   constructor(storage: StorageProvider) {
@@ -33,7 +33,7 @@ export class BufferManager {
     await this.storage.rpush(key, JSON.stringify(request));
     await this.storage.expire(key, this.TTL);
     
-    console.log(`[ConsentGuard] Buffered request for ${userId} (Destination: ${data.destination})`);
+    console.log(`[Sluice] Buffered request for ${userId} (Destination: ${data.destination})`);
   }
 
   /**

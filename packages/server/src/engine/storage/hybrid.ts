@@ -23,7 +23,7 @@ export class HybridStorageProvider implements StorageProvider {
       }
       return value;
     } catch (error) {
-      console.warn(`[ConsentGuard] Primary storage error, falling back to local cache for ${key}`);
+      console.warn(`[Sluice] Primary storage error, falling back to local cache for ${key}`);
       // Fallback: return expired cache if primary fails (Stale-While-Revalidate pattern)
       return cached ? cached.value : null;
     }

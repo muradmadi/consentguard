@@ -4,7 +4,7 @@ import { fetchStats, fetchRules, fetchAuditLogs, updateRule } from './lib/api'
 import { RuleEditor } from './components/RuleEditor'
 import { LiveTraffic } from './components/LiveTraffic'
 import { AlertCircle } from 'lucide-react'
-import type { DestinationRule } from '@consentguard/shared'
+import type { DestinationRule } from '@sluice/shared'
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
@@ -49,7 +49,7 @@ function App() {
       <header>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Shield size={24} color="#fff" />
-          <h3 style={{ margin: 0, letterSpacing: '-0.02em' }}>ConsentGuard</h3>
+          <h3 style={{ margin: 0, letterSpacing: '-0.02em' }}>Sluice</h3>
           <span className="badge badge-success" style={{ marginLeft: '8px', fontSize: '10px' }}>Beta</span>
         </div>
         <nav className="nav-links">
@@ -141,7 +141,7 @@ function App() {
              <div style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
               <div>
                 <h1 style={{ marginBottom: '8px' }}>Destination Rules</h1>
-                <p>Manage how ConsentGuard transforms data for each provider.</p>
+                <p>Manage how Sluice transforms data for each provider.</p>
               </div>
               <button className="btn">Add Destination</button>
             </div>
@@ -191,7 +191,7 @@ function App() {
           <div className="fade-in">
              <div style={{ marginBottom: '32px' }}>
                 <h1 style={{ marginBottom: '8px' }}>Global Registry</h1>
-                <p>The universal list of destinations ConsentGuard can protect out-of-the-box.</p>
+                <p>The universal list of destinations Sluice can protect out-of-the-box.</p>
               </div>
               
               <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: '32px' }}>

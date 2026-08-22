@@ -9,7 +9,7 @@ export interface MiddlewareConfig {
 
 /**
  * Mountable Hono application middleware generator.
- * Allows developers to mount the ConsentGuard proxy cleanly:
+ * Allows developers to mount the Sluice proxy cleanly:
  * @example
  *   app.route('/analytics', consentProxyMiddleware({ redisUrl: '...' }))
  */
@@ -22,7 +22,7 @@ export function consentProxyMiddleware(options: MiddlewareConfig = {}) {
     const nodeEnv = env.NODE_ENV || env.env || 'development';
     const isTest = nodeEnv === 'test';
 
-    storage = isTest || env.CG_STORAGE === 'memory'
+    storage = isTest || env.SLUICE_STORAGE === 'memory'
       ? new MemoryStorageProvider()
       : new RedisStorageProvider(redisUrl);
   }
