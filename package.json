@@ -4,6 +4,10 @@
   "workspaces": [
     "packages/*"
   ],
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "npx turbo run build",
     "dev": "npx turbo run dev",
@@ -12,7 +16,7 @@
     "test": "npx turbo run test"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^24.0.0",
     "eslint": "^8.57.0",
     "prettier": "^3.2.5",
     "turbo": "^1.13.0",
