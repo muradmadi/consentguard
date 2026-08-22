@@ -1,5 +1,5 @@
 import type { PiiDetector, TransformationAction, TransformationRecord } from '@sluice/shared'
-import { applyHash } from '../transformations/hash'
+import { applyHash, type Hasher } from '../transformations/hash'
 import { applyStrip } from '../transformations/strip'
 import { DetectorDefinition, resolveDetectors } from './patterns'
 
@@ -13,13 +13,21 @@ const PLACEHOLDER = '[REDACTED]'
  * Mutates `payload` in place — callers hand it the clone `scrubPayload` already
  * made. Returns one record per detector that actually changed something, with
  * the concrete path it fired at. The matched value is never recorded.
+ *
+ * Everything this pass hashes is pseudonymised. A match key is a digest the
+ * vendor can join on, and nothing found by shape at a path nobody declared has
+ * been reviewed as a field the vendor is entitled to match against.
  */
-export function scanPayload(payload: any, enabled: PiiDetector[]): TransformationRecord[] {
+export function scanPayload(
+  payload: any,
+  enabled: PiiDetector[],
+  hasher: Hasher,
+): TransformationRecord[] {
   const active = resolveDetectors(enabled)
   if (active.length === 0 || !payload || typeof payload !== 'object') return []
 
   const report: TransformationRecord[] = []
-  walk(payload, '', active, report)
+  walk(payload, '', active, report, hasher)
   return report
 }
 
@@ -28,6 +36,7 @@ function walk(
   prefix: string,
   active: DetectorDefinition[],
   report: TransformationRecord[],
+  hasher: Hasher,
 ): void {
   // Snapshot the keys: a whole-value strip deletes one as we go.
   const keys: (string | number)[] = Array.isArray(container)
@@ -39,9 +48,9 @@ function walk(
     const path = prefix ? `${prefix}.${key}` : String(key)
 
     if (typeof value === 'string') {
-      inspect(container, key, path, active, report)
+      inspect(container, key, path, active, report, hasher)
     } else if (value && typeof value === 'object') {
-      walk(value, path, active, report)
+      walk(value, path, active, report, hasher)
     }
     // Numbers are left alone deliberately: every detector here requires
     // punctuation or an issuer prefix, so a bare number is an id, not PII.
@@ -54,6 +63,7 @@ function inspect(
   path: string,
   active: DetectorDefinition[],
   report: TransformationRecord[],
+  hasher: Hasher,
 ): void {
   for (const detector of active) {
     const value = container[key]
@@ -68,7 +78,7 @@ function inspect(
     if (matches.length === 1 && matches[0][0] === value.trim()) {
       report.push({
         path,
-        action: replaceWholeValue(container, key, detector.action),
+        ...replaceWholeValue(container, key, detector.action, hasher),
         matched: 1,
         detector: detector.id,
       })
@@ -97,19 +107,20 @@ function replaceWholeValue(
   container: any,
   key: string | number,
   action: TransformationAction,
-): TransformationAction {
+  hasher: Hasher,
+): { action: TransformationAction; mode?: 'pseudonymize' } {
   if (action === 'hash') {
-    applyHash(container, String(key))
-    return 'hash'
+    applyHash(container, String(key), hasher, { mode: 'pseudonymize' })
+    return { action: 'hash', mode: 'pseudonymize' }
   }
 
   // Deleting an array element shifts every index after it, and vendors index
   // into these arrays. Inside an array a strip becomes a redaction.
   if (action === 'strip' && !Array.isArray(container)) {
     applyStrip(container, String(key))
-    return 'strip'
+    return { action: 'strip' }
   }
 
   container[key] = PLACEHOLDER
-  return 'redact'
+  return { action: 'redact' }
 }

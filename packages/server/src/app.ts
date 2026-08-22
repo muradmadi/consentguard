@@ -1,10 +1,11 @@
 import { Hono, Context } from 'hono'
 import { cors } from 'hono/cors'
-import { getCookie } from 'hono/cookie'
+import { getCookie, setCookie } from 'hono/cookie'
 import { serveStatic } from '@hono/node-server/serve-static'
-import { ConsentStateSchema, PiiDetectorSchema } from '@sluice/shared'
+import { ConsentStateSchema, DestinationRuleSchema, PiiDetectorSchema } from '@sluice/shared'
 import { ConsentManager } from './engine/consent'
 import { scrubPayload } from './engine/transformer'
+import { createHasher } from './engine/transformations/hash'
 import { scrubUrl } from './engine/url'
 import { metrics } from './engine/metrics'
 import {
@@ -21,6 +22,15 @@ import { createWebhookRouter } from './webhooks/cmp'
 import { StorageProvider, HybridStorageProvider } from './engine/storage'
 import { getServerConfig, ServerConfig } from './config'
 import { getAdapter, VendorContext, VendorForward } from './destinations/adapters'
+
+/**
+ * The one persistent identifier Sluice writes, and only after a consent record
+ * exists for the id it names. The client mints a session identifier for itself
+ * and sends it in a header or a query parameter; this cookie is the server
+ * promoting one of those, which is why it outranks both when identity is
+ * resolved.
+ */
+const IDENTITY_COOKIE = 'cuid'
 
 export interface AppOptions {
   /**
@@ -49,6 +59,10 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
     required: config.auditRequired,
   })
   const ruleManager = new RuleManager(effectiveStorage)
+  // Built once from the injected env. It used to be rebuilt inside the hash
+  // primitive, from `process.env` rather than from the env the app was handed,
+  // which on a runtime without `process` fell through to a hardcoded literal.
+  const hasher = createHasher(config.hashSecret)
 
   app.use('*', requestLogger)
   app.route('/webhooks', createWebhookRouter(storage, config))
@@ -72,7 +86,8 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
   app.get('/dashboard', (c) => c.redirect('/dashboard/index.html'))
   app.use('/sluice-client.js', serveStatic({ path: clientBundlePath }))
 
-  // CORS: browser calls to /ingest must send credentials (the cuid cookie).
+  // CORS: browser calls to /ingest must send credentials (the identity cookie,
+  // once consent has promoted one).
   // We reflect the request's origin only when it's in the allowlist so cookies
   // flow correctly, and 403 elsewhere at the app level.
   app.use(
@@ -172,9 +187,18 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
     return c.json(await ruleManager.getAllRules())
   })
 
+  /**
+   * An override that will not parse is discarded at read time in favour of the
+   * registry, so accepting one here would report a save that changes nothing —
+   * an operator surface stating something it has not established. It is
+   * rejected at the door instead, with the schema's own reason.
+   */
   app.put('/api/rules/:id', async (c) => {
     if (!requireAdmin(c, config)) return c.json({ error: 'Unauthorized' }, 403)
-    await ruleManager.setOverride(c.req.param('id'), await c.req.json())
+    const id = c.req.param('id')
+    const parsed = DestinationRuleSchema.safeParse({ ...(await c.req.json()), id })
+    if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400)
+    await ruleManager.setOverride(id, parsed.data)
     return c.json({ status: 'saved' })
   })
 
@@ -296,9 +320,13 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
 
     const destination = c.req.param('destination')
 
+    // The cookie comes first because only this server writes it, and only after
+    // a consent record exists for that id. Everything else is the page talking:
+    // a session identifier the browser minted for itself, which is what an
+    // unconsented visitor has and all they should have.
     const userId =
+      getCookie(c, IDENTITY_COOKIE) ||
       c.req.header('X-Consent-UserId') ||
-      getCookie(c, 'cuid') ||
       c.req.query('cuid') ||
       c.req.query('sluice_user_id')
 
@@ -353,6 +381,15 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
       return c.body(null, 204)
     }
 
+    // Promotion, and the only place a persistent identifier is created. Until
+    // consent exists for this id it lives for the browsing session and nowhere
+    // else; a visitor who was never asked, or who said no, is never given one.
+    // It is set from a first-party response rather than by `document.cookie`,
+    // which Safari caps at seven days whatever expiry it names.
+    if (consent._exists && !getCookie(c, IDENTITY_COOKIE)) {
+      setCookie(c, IDENTITY_COOKIE, userId, identityCookieOptions(config))
+    }
+
     // The evidence gate. Fail-closed already covers storage, parse and consent
     // failures; this applies it to the record itself. A configured sink that
     // cannot write means we would be forwarding personal data with no proof of
@@ -378,6 +415,7 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
       rawBody,
       rule,
       serverConfig: config,
+      hasher,
     }
 
     const built = await buildForward(ctx)
@@ -571,7 +609,10 @@ async function routeForward(ctx: VendorContext): Promise<BuildOutcome> {
     return { ok: false, reason: 'unscrubbable_payload' }
   }
 
-  const scrub = scrubPayload(ctx.jsonBody, ctx.rule, { detectors: ctx.serverConfig.detectors })
+  const scrub = scrubPayload(ctx.jsonBody, ctx.rule, {
+    detectors: ctx.serverConfig.detectors,
+    hasher: ctx.hasher,
+  })
   return {
     ok: true,
     forward: {
@@ -597,7 +638,10 @@ async function routeForward(ctx: VendorContext): Promise<BuildOutcome> {
  * it to whatever the routing step hands back.
  */
 function withScrubbedUrl(forward: VendorForward, ctx: VendorContext): VendorForward {
-  const scrub = scrubUrl(forward.url, ctx.rule, { detectors: ctx.serverConfig.detectors })
+  const scrub = scrubUrl(forward.url, ctx.rule, {
+    detectors: ctx.serverConfig.detectors,
+    hasher: ctx.hasher,
+  })
   if (scrub.report.length === 0) return forward
   return { ...forward, url: scrub.url, report: [...forward.report, ...scrub.report] }
 }
@@ -690,6 +734,25 @@ function parseAuditQuery(c: Context): ParsedQuery {
   }
 
   return { ok: true, query }
+}
+
+/**
+ * A year, HttpOnly, and first-party.
+ *
+ * `HttpOnly` because nothing in the page needs to read this: the browser sends
+ * it automatically, and a script that cannot read the identifier cannot ship it
+ * to a vendor of its own accord. `Secure` is dropped only in development, where
+ * the proxy is reached over plain http and the browser would discard the cookie.
+ */
+function identityCookieOptions(config: ServerConfig) {
+  const isDev = config.env === 'development' || config.env === 'test'
+  return {
+    path: '/',
+    httpOnly: true,
+    secure: !isDev,
+    sameSite: 'Lax' as const,
+    maxAge: 365 * 24 * 60 * 60,
+  }
 }
 
 function requireAdmin(c: Context, config: ServerConfig): boolean {

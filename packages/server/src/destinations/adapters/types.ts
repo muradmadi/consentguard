@@ -1,5 +1,6 @@
 import type { DestinationRule, TransformationRecord } from '@sluice/shared'
 import type { ServerConfig } from '../../config'
+import type { Hasher } from '../../engine/transformations/hash'
 
 /**
  * Context passed to a vendor adapter for one intercepted request.
@@ -18,6 +19,11 @@ export interface VendorContext {
   rawBody: string
   rule: DestinationRule
   serverConfig: ServerConfig
+  /**
+   * The deployment's two hashes, built once at construction. An adapter scrubs
+   * its own payload, so it needs these; it must never build its own.
+   */
+  hasher: Hasher
 }
 
 /**

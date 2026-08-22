@@ -50,8 +50,11 @@ export const DETECTORS: DetectorDefinition[] = [
   {
     id: 'email',
     pattern: /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi,
-    // Hashed, not stripped: Meta and Google both accept a pre-hashed email for
-    // identity resolution, so the event survives without carrying the address.
+    // Hashed, not stripped: the same address keeps the same token, so the event
+    // still counts one person as one person, without carrying the address. It
+    // is a pseudonym, not a match key — the vendor cannot resolve identity from
+    // it. A field a vendor is allowed to match on is a line in a destination
+    // rule, not something a scanner decides by shape.
     action: 'hash',
   },
   {

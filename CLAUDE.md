@@ -61,14 +61,22 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
 1. **Origin check** — `requireAllowedOrigin`. Not in `SLUICE_ALLOWED_ORIGINS` → `403`.
    An empty allowlist is permissive; that is a dev-only default. A non-empty one
    requires the header: a request that will not say where it is from is not on the list.
-2. **Identity** — `X-Consent-UserId` header, then `cuid` cookie, then `?cuid=`,
-   then `?sluice_user_id=`. No identity → `204`.
+2. **Identity** — the `cuid` cookie first, then the `X-Consent-UserId` header, then
+   `?cuid=`, then `?sluice_user_id=`. No identity → `204`. The cookie outranks the rest
+   because only this server writes it, and only after consent (step 5a); everything else
+   is a session identifier the page minted for itself.
 3. **Destination known?** — `RuleManager.isSupported`. Unknown → `400`.
 4. **Body read once**, capped at `SLUICE_MAX_BODY_BYTES` (64 KiB default), into
    `rawBody` + `jsonBody` (vendors like GA4 send form-encoded). Over the cap → `413`.
    `Content-Length` is a claim, so the stream is counted as it arrives.
 5. **Consent gate** — `ConsentManager.hasConsent(consent, rule.category)`. Denied →
-   blocked (`204`).
+   blocked (`204`). `necessary` is granted unconditionally and the `unknown` category —
+   what `getDefaultRule` gives a destination whose rule would not parse — is refused
+   unconditionally.
+   **5a. Identity promotion.** Past the gate, if a consent record exists for this id and
+   the browser holds no `cuid` cookie, the response sets one: `HttpOnly`, a year,
+   first-party. This is the only place a persistent identifier is created. A user who was
+   never asked — a `necessary` destination — or who said no never gets one.
 6. **Evidence gate** — `auditLogger.evidenceAvailable()`. A durable audit sink that
    is configured and cannot write means a forward could not be evidenced, so it is not
    made: blocked (`204`) with `evidence_unavailable`. Off with `SLUICE_AUDIT_REQUIRED=false`;
@@ -94,7 +102,16 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
 
 - **Transformation engine** — `engine/transformer.ts` walks a dotted path with `*` as an
   array wildcard, dispatching to `engine/transformations/{strip,hash,redact}.ts`. Each
-  primitive returns whether it fired; `scrubPayload` returns `{ payload, report }`.
+  primitive reports what it actually did; `scrubPayload` returns `{ payload, report }`.
+- **The two hashes** — `engine/transformations/hash.ts` builds a `Hasher` once per app
+  from `SLUICE_HASH_SECRET`. `pseudonymize` is HMAC-SHA256 under that key and is the
+  default: an unkeyed digest of an email is recoverable from a dictionary, so it is not a
+  pseudonym. `match_key` is the vendor's contract — `normalize` (`engine/transformations/
+normalize.ts`), then unsalted SHA-256 — and is allowed only where a rule declares
+  `mode: 'match_key'` with a `normalize` format, currently Meta's `em` and `ph` alone.
+  The value scan always pseudonymises: a field found by shape has been reviewed by
+  nobody. A match key whose value will not normalise is stripped, not hashed, because the
+  digest of an empty string is a constant. The audit records which mode fired.
 - **Value scan** — `engine/detectors/patterns.ts` defines the detectors (email, phone,
   ipv4, ipv6, credit_card, and opt-in us_ssn) and `detectors/scan.ts` walks every string
   in the payload applying them. `scrubPayload` runs it after the declared pass, so a field
@@ -119,6 +136,9 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
   each live in exactly one place.
 - **Destination rules** — `destinations/<vendor>.ts`, registered in `destinations/registry.ts`.
   A rule is declarative: `id`, `category`, `endpoints`, optional `upstreamUrl`, `transformations[]`.
+  A hash transformation may carry `mode` and `normalize`; the schema rejects `match_key`
+  without a format, and either field on an action that does not hash. A rule override that
+  fails to parse is discarded in favour of the registry, so the schema is the gate.
 - **Vendor adapters** — `destinations/adapters/<vendor>.ts`, registered in `adapters/index.ts`.
   Only needed when the vendor's server-side API differs in shape from what the browser sent.
 - **Interception patterns** — `packages/client/src/patterns.ts` maps a domain substring to a
@@ -150,6 +170,19 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
 Deploying in a container means mounting a volume at `SLUICE_AUDIT_DIR`. Without one the
 record dies with the container, and `SLUICE_AUDIT_REQUIRED` will not catch it — the sink
 is writable, it is just ephemeral.
+
+### Secrets the proxy will not start without
+
+| Variable             | Meaning                                                                      |
+| -------------------- | ---------------------------------------------------------------------------- |
+| `ADMIN_SECRET`       | Bearer for every operator surface. Generated per process in dev, with a log. |
+| `SLUICE_HASH_SECRET` | The key every pseudonymising hash is taken under. Same dev treatment.        |
+
+Neither has a default; outside `NODE_ENV=development|test`, a missing one is a fatal
+start-up error naming the variable. The development fallbacks are generated per process,
+so pseudonyms are not comparable across restarts — which is the point, and the reason it
+is not how to run this for real. `sluice init` writes both into the compose file it
+generates. `SLUICE_HASH_SALT` is no longer read; setting it logs a warning and nothing else.
 
 ### Invariants
 
@@ -241,23 +274,22 @@ Real, verified, and unfixed. Do not re-diagnose these from scratch:
 - **Load-order fragility.** A tracker that captures `window.fetch` before the Sluice
   bundle executes keeps the unpatched reference. Scripts above the Sluice tag in the
   initial HTML are never neutralized.
-- **The `cuid` cookie is set before any consent exists.** `getOrSetUserId` writes a
-  365-day cookie and a `localStorage` entry on page load. Storing a persistent
-  tracking identifier without consent is an ePrivacy Art. 5(3) problem in a tool
-  whose whole point is compliance.
+- **A session identifier is still stored before consent.** The client writes one
+  `sessionStorage` entry on page load; it dies with the tab and is never promoted to
+  anything persistent until a consent record exists, but it is still storage on a
+  visitor's device. Whether the firewall's own routing identifier is strictly necessary
+  is a judgement call, not a settled one.
 - **One real adapter.** `adapters/index.ts` registers GA4 and nothing else. The other
   five registry entries fall through to generic JSON passthrough; `facebook.ts` has a
-  literal `<PIXEL_ID>` placeholder in its `upstreamUrl` and cannot work.
+  literal `<PIXEL_ID>` placeholder in its `upstreamUrl` and cannot work. Its `em` and `ph`
+  match keys are declared and tested but have never been sent to Meta, because nothing
+  can reach Meta yet.
 - **Rule health only covers destinations the registry knows.** `/api/rule-health` joins
   the audit against `RuleManager.getAllRules()`, which iterates `REGISTRY_KEYS`. An
   override for an id the registry lacks gets no health row, because `StorageProvider`
   cannot enumerate keys.
 - **A day's segment is read whole.** `FileAuditSink.query` loads one UTC-day file at a
   time. Fine at the traffic this is built for; a very high-volume day is a large read.
-- **`getDefaultRule` returns `category: 'necessary'`**, which `hasConsent` always
-  grants. Reachable when a malformed rule override exists for an id the registry does
-  not know. Fail-open in a fail-closed system — though it now forwards nowhere, because
-  the rule declares no endpoints and the egress check refuses everything.
 - **The egress check does not resolve DNS.** A destination rule that declares a domain
   which resolves to a private address still reaches it. Closing that needs a resolver on
   the hot path; reaching it needs the ability to write destination rules.

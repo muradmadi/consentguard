@@ -70,7 +70,10 @@ export const ga4Adapter: VendorAdapter = {
     // Apply declarative rule transformations against the MP-shaped payload, then
     // the value scan, and carry the report out so the audit reflects this scrub
     // rather than the rule.
-    const scrub = scrubPayload(mpPayload, ctx.rule, { detectors: ctx.serverConfig.detectors })
+    const scrub = scrubPayload(mpPayload, ctx.rule, {
+      detectors: ctx.serverConfig.detectors,
+      hasher: ctx.hasher,
+    })
     mpPayload = scrub.payload
 
     const url = `https://www.google-analytics.com/mp/collect?measurement_id=${encodeURIComponent(

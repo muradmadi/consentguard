@@ -175,7 +175,10 @@ program
             // An entry with a detector was found by the value scan; without one
             // it came from a path the destination's rule declared.
             const origin = t.detector ? pc.yellow(`detected ${t.detector}`) : 'declared'
-            console.log(pc.dim(`  └─ ${t.action} ${t.path} ×${t.matched} `) + pc.dim(`(${origin})`))
+            // A match key is a digest the vendor can join back to a person and a
+            // pseudonym is not, so the line says which one was applied.
+            const action = t.mode ? `${t.action}:${t.mode}` : t.action
+            console.log(pc.dim(`  └─ ${action} ${t.path} ×${t.matched} `) + pc.dim(`(${origin})`))
           }
           lastTimestamp = log.timestamp
         }

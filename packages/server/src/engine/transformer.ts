@@ -1,11 +1,12 @@
 import {
   DestinationRule,
   PiiDetector,
+  Transformation,
   TransformationAction,
   TransformationRecord,
 } from '@sluice/shared'
 import { applyStrip } from './transformations/strip'
-import { applyHash } from './transformations/hash'
+import { applyHash, type Hasher } from './transformations/hash'
 import { applyRedact } from './transformations/redact'
 import { DEFAULT_DETECTORS } from './detectors/patterns'
 import { scanPayload } from './detectors/scan'
@@ -28,6 +29,12 @@ export interface ScrubOptions {
    * should scrub more than asked, never less.
    */
   detectors?: PiiDetector[]
+  /**
+   * The two hashes, built once from the deployment's secret. Required rather
+   * than defaulted: a hash with no key behind it is not a pseudonym, and there
+   * is no safe value to invent here.
+   */
+  hasher: Hasher
 }
 
 /**
@@ -38,7 +45,7 @@ export interface ScrubOptions {
 export function scrubPayload(
   payload: any,
   rule: DestinationRule,
-  options: ScrubOptions = {},
+  options: ScrubOptions,
 ): ScrubResult {
   const detectors = options.detectors ?? DEFAULT_DETECTORS
   const declared = rule.transformations ?? []
@@ -52,35 +59,40 @@ export function scrubPayload(
   const report: TransformationRecord[] = []
 
   for (const transform of declared) {
-    const matched = applyTransformation(
-      scrubbed,
-      transform.path,
-      transform.action,
-      transform.pattern,
-    )
-    if (matched > 0) {
-      report.push({ path: transform.path, action: transform.action, matched })
+    for (const outcome of applyTransformation(scrubbed, transform, options.hasher)) {
+      report.push({ path: transform.path, ...outcome })
     }
   }
 
-  report.push(...scanPayload(scrubbed, detectors))
+  report.push(...scanPayload(scrubbed, detectors, options.hasher))
 
   return { payload: scrubbed, report }
 }
 
+/** One group of values a declared transformation changed the same way. */
+interface Outcome {
+  action: TransformationAction
+  matched: number
+  mode?: TransformationRecord['mode']
+}
+
 /**
  * Apply a transformation action to a specific path in an object.
- * Supports '*' as a wildcard for array elements. Returns the number of values
- * actually changed, which a wildcard path can push above one.
+ * Supports '*' as a wildcard for array elements. Returns one group per outcome
+ * actually produced, which is usually one: a wildcard path pushes `matched`
+ * above one, and splits into two groups only when a declared match key held a
+ * value that would not normalise and was removed instead.
  */
-function applyTransformation(
-  obj: any,
-  path: string,
-  action: TransformationAction,
-  pattern?: string,
-): number {
-  const parts = path.split('.')
-  let matched = 0
+function applyTransformation(obj: any, transform: Transformation, hasher: Hasher): Outcome[] {
+  const parts = transform.path.split('.')
+  const groups = new Map<string, Outcome>()
+
+  const record = (action: TransformationAction, mode?: TransformationRecord['mode']) => {
+    const key = `${action}:${mode ?? ''}`
+    const existing = groups.get(key)
+    if (existing) existing.matched++
+    else groups.set(key, { action, matched: 1, ...(mode ? { mode } : {}) })
+  }
 
   function traverse(current: any, remainingParts: string[]) {
     if (!current || remainingParts.length === 0) return
@@ -96,19 +108,24 @@ function applyTransformation(
 
     if (tail.length === 0) {
       // Leaf node: Apply action
-      let fired = false
-      switch (action) {
+      switch (transform.action) {
         case 'strip':
-          fired = applyStrip(current, head)
+          if (applyStrip(current, head)) record('strip')
           break
-        case 'hash':
-          fired = applyHash(current, head)
+        case 'hash': {
+          const outcome = applyHash(current, head, hasher, {
+            // Unstated means pseudonymize. The weaker digest is never the
+            // default: a rule has to ask for a match key by name.
+            mode: transform.mode ?? 'pseudonymize',
+            normalize: transform.normalize,
+          })
+          if (outcome) record(outcome.action, outcome.action === 'hash' ? outcome.mode : undefined)
           break
+        }
         case 'redact':
-          fired = applyRedact(current, head, pattern)
+          if (applyRedact(current, head, transform.pattern)) record('redact')
           break
       }
-      if (fired) matched++
     } else {
       // Branch node: Continue traversal
       if (current[head]) {
@@ -118,5 +135,5 @@ function applyTransformation(
   }
 
   traverse(obj, parts)
-  return matched
+  return [...groups.values()]
 }

@@ -3,6 +3,7 @@ import { ga4Adapter } from './ga4'
 import { ga4 as ga4Rule } from '../ga4'
 import type { VendorContext } from './types'
 import { getServerConfig } from '../../config'
+import { createHasher } from '../../engine/transformations/hash'
 
 function makeContext(
   overrides: Partial<VendorContext> & { env?: Record<string, string> } = {},
@@ -24,6 +25,7 @@ function makeContext(
     rawBody: overrides.rawBody ?? '',
     rule: overrides.rule ?? ga4Rule,
     serverConfig: overrides.serverConfig ?? getServerConfig(env),
+    hasher: overrides.hasher ?? createHasher('test-hash-secret'),
   }
 }
 

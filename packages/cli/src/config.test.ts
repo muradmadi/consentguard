@@ -34,12 +34,14 @@ describe('buildConfig', () => {
       adminSecret: 's3cret',
       allowedOrigins: 'https://app.example',
     })
-    expect(config).toEqual({
+    expect(config).toMatchObject({
       port: 8080,
       redisUrl: 'redis://cache:6379',
       adminSecret: 's3cret',
       allowedOrigins: ['https://app.example'],
     })
+    // Never an answer: there is no safe value for an operator to type here.
+    expect(config.hashSecret).toBeTruthy()
   })
 
   it('falls back to defaults when the prompt was cancelled', () => {
@@ -83,6 +85,17 @@ describe('renderCompose', () => {
   it('threads the admin secret and origins into the environment', () => {
     expect(yaml).toContain('- ADMIN_SECRET=topsecret')
     expect(yaml).toContain('- SLUICE_ALLOWED_ORIGINS=https://a.example,https://b.example')
+  })
+
+  /**
+   * The proxy refuses to start outside development without this, and a compose
+   * file that omits it hands the operator a container that either will not boot
+   * or quietly rotates every pseudonym on restart.
+   */
+  it('writes a generated hash secret into the environment', () => {
+    expect(yaml).toContain(`- SLUICE_HASH_SECRET=${config.hashSecret}`)
+    expect(config.hashSecret).toBeTruthy()
+    expect(buildConfig({}).hashSecret).not.toBe(config.hashSecret)
   })
 
   it('declares a redis service the proxy depends on', () => {

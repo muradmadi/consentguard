@@ -7,6 +7,7 @@ import {
   IngestRequestSchema,
   TransformationActionSchema,
   TransformationRecordSchema,
+  UNKNOWN_DESTINATION_CATEGORY,
 } from './schema'
 
 describe('ConsentStateSchema', () => {
@@ -199,5 +200,79 @@ describe('AuditRecordSchema', () => {
       transformations: [{ path: 'email', action: 'strip', matched: 1 }],
     })
     expect(parsed.transformations[0].path).toBe('email')
+  })
+})
+
+/**
+ * A match key is the weaker disclosure — a digest the vendor, and anyone else
+ * holding the address, can compute. The schema is where "only where a rule says
+ * so, and only where it says which format" is enforced, because a rule override
+ * that fails to parse is discarded in favour of the registry.
+ */
+describe('hash modes on a destination rule', () => {
+  const base = { id: 'meta', category: 'marketing', endpoints: ['facebook.com/tr'] }
+
+  it('defaults to no mode, which the transformer reads as pseudonymize', () => {
+    const parsed = DestinationRuleSchema.parse({
+      ...base,
+      transformations: [{ path: 'user_id', action: 'hash' }],
+    })
+    expect(parsed.transformations[0].mode).toBeUndefined()
+  })
+
+  it('accepts a match key that says which format it holds', () => {
+    const parsed = DestinationRuleSchema.parse({
+      ...base,
+      transformations: [{ path: 'em', action: 'hash', mode: 'match_key', normalize: 'email' }],
+    })
+    expect(parsed.transformations[0]).toMatchObject({ mode: 'match_key', normalize: 'email' })
+  })
+
+  it('rejects a match key with no normalisation, which would match nothing', () => {
+    const result = DestinationRuleSchema.safeParse({
+      ...base,
+      transformations: [{ path: 'em', action: 'hash', mode: 'match_key' }],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects a mode on an action that does not hash', () => {
+    const result = DestinationRuleSchema.safeParse({
+      ...base,
+      transformations: [{ path: 'em', action: 'strip', mode: 'match_key', normalize: 'email' }],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects a mode nobody defined', () => {
+    const result = DestinationRuleSchema.safeParse({
+      ...base,
+      transformations: [{ path: 'em', action: 'hash', mode: 'plain_sha256' }],
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe('TransformationRecordSchema hash mode', () => {
+  it('records which hash was applied', () => {
+    const parsed = TransformationRecordSchema.parse({
+      path: 'em',
+      action: 'hash',
+      matched: 1,
+      mode: 'match_key',
+    })
+    expect(parsed.mode).toBe('match_key')
+  })
+
+  it('leaves the mode unset on a record written before the modes existed', () => {
+    const parsed = TransformationRecordSchema.parse({ path: 'em', action: 'hash', matched: 1 })
+    expect(parsed.mode).toBeUndefined()
+  })
+})
+
+describe('UNKNOWN_DESTINATION_CATEGORY', () => {
+  it('is not a purpose any consent management platform grants', () => {
+    expect(UNKNOWN_DESTINATION_CATEGORY).toBe('unknown')
+    expect(UNKNOWN_DESTINATION_CATEGORY).not.toBe('necessary')
   })
 })

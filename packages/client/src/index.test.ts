@@ -39,6 +39,7 @@ beforeEach(() => {
   document.head.innerHTML = ''
   document.cookie = 'cuid=; Max-Age=0; path=/'
   localStorage.clear()
+  sessionStorage.clear()
   delete (window as any).Sluice
   delete (window as any).__sluiceConfig
   // init() is idempotent per window, and jsdom's window outlives resetModules.
@@ -97,14 +98,51 @@ describe('public API', () => {
     expect((window as any).Sluice.proxyBase).toBe(`${window.location.origin}/from-meta`)
   })
 
-  it('persists the user id in a cookie and reuses it', async () => {
+  /**
+   * The identifier is the one thing this bundle stores, and storing a
+   * persistent one before a consent record exists is the ePrivacy Art. 5(3)
+   * problem this tool exists to prevent. It lasts a session; making it last
+   * longer is the server's call, after consent.
+   */
+  it('keeps the user id for the session and reuses it', async () => {
     await loadClient()
     const first = (window as any).Sluice.userId
-    expect(document.cookie).toContain(`cuid=${first}`)
+    expect(sessionStorage.getItem('sluice_session_id')).toBe(first)
 
     delete (window as any).Sluice
     await loadClient()
     expect((window as any).Sluice.userId).toBe(first)
+  })
+
+  it('writes no persistent identifier before consent exists', async () => {
+    await loadClient()
+    expect(document.cookie).not.toContain('cuid=')
+    expect(localStorage.getItem('sluice_user_id')).toBeNull()
+  })
+
+  it('removes the persistent id an earlier version stored without consent', async () => {
+    localStorage.setItem('sluice_user_id', 'minted-before-consent')
+    await loadClient()
+    expect(localStorage.getItem('sluice_user_id')).toBeNull()
+    expect((window as any).Sluice.userId).not.toBe('minted-before-consent')
+  })
+
+  it('starts a fresh session id rather than failing when storage is blocked', async () => {
+    const blocked = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage blocked')
+    })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage blocked')
+    })
+    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('storage blocked')
+    })
+
+    await loadClient()
+    expect(typeof (window as any).Sluice.userId).toBe('string')
+    expect((window as any).Sluice.userId.length).toBeGreaterThan(0)
+    blocked.mockRestore()
+    vi.restoreAllMocks()
   })
 
   it('pins the user id when one is supplied', async () => {

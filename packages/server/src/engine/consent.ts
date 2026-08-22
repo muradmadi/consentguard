@@ -1,4 +1,4 @@
-import { ConsentState, ConsentStateSchema } from '@sluice/shared'
+import { ConsentState, ConsentStateSchema, UNKNOWN_DESTINATION_CATEGORY } from '@sluice/shared'
 import { StorageProvider } from './storage'
 
 export class ConsentManager {
@@ -67,8 +67,14 @@ export class ConsentManager {
 
   /**
    * Check if a specific purpose is granted.
+   *
+   * The unknown category is refused as unconditionally as `necessary` is
+   * granted. It is what a destination gets when its rule could not be read, and
+   * a CMP that grants a purpose by that name has not been asked about this
+   * destination — nobody has.
    */
   hasConsent(state: ConsentState, category: string): boolean {
+    if (category === UNKNOWN_DESTINATION_CATEGORY) return false
     if (category === 'necessary') return true
     return !!state.purposes[category]
   }

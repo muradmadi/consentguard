@@ -24,7 +24,7 @@ export interface UrlScrubResult {
 export function scrubUrl(
   url: string,
   rule: DestinationRule,
-  options: ScrubOptions = {},
+  options: ScrubOptions,
 ): UrlScrubResult {
   let parsed: URL
   try {

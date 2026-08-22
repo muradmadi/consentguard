@@ -23,3 +23,35 @@ describe('detector configuration', () => {
     expect(config.detectors).toEqual(['email'])
   })
 })
+
+/**
+ * A default secret is a published secret. The old code had two of them —
+ * `default-salt` in the config and `sluice-default-salt-12345` behind it in the
+ * transformation — so a deployment that never set the variable pseudonymised
+ * every email under a key printed in this repository.
+ */
+describe('hash secret', () => {
+  it('takes the configured secret', () => {
+    const config = getServerConfig({ ...BASE, SLUICE_HASH_SECRET: 'from-the-environment' })
+    expect(config.hashSecret).toBe('from-the-environment')
+  })
+
+  it('refuses to start outside development without one', () => {
+    expect(() => getServerConfig({ NODE_ENV: 'production', ADMIN_SECRET: 'admin' })).toThrow(
+      /SLUICE_HASH_SECRET/,
+    )
+  })
+
+  it('generates one per process in development rather than defaulting to a literal', () => {
+    const secret = getServerConfig(BASE).hashSecret
+    expect(secret).toBeTruthy()
+    expect(secret).not.toMatch(/default/)
+    expect(getServerConfig(BASE).hashSecret).toBe(secret)
+  })
+
+  it('reads the env it was handed, not the process it happens to run in', () => {
+    const injected = getServerConfig({ ...BASE, SLUICE_HASH_SECRET: 'injected' })
+    expect(injected.hashSecret).toBe('injected')
+    expect(injected.hashSecret).not.toBe(process.env.SLUICE_HASH_SECRET)
+  })
+})

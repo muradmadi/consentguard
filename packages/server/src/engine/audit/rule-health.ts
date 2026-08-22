@@ -69,6 +69,10 @@ export async function deriveRuleHealth(
       return {
         path: transformation.path,
         action: transformation.action,
+        // Declared, not observed: this row says what the rule asks for, and
+        // `matched` says whether it ever happened. A match key that never fires
+        // is the one worth seeing on this page.
+        ...(transformation.mode ? { mode: transformation.mode } : {}),
         matched: hit?.matched ?? 0,
         lastFiredAt: hit?.lastFiredAt ?? null,
       }

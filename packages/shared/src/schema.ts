@@ -20,6 +20,78 @@ export const TransformationActionSchema = z.enum(['strip', 'hash', 'redact'])
 export type TransformationAction = z.infer<typeof TransformationActionSchema>
 
 /**
+ * What a hash is for. These are two different jobs and one digest cannot do both.
+ *
+ * `pseudonymize` is a keyed HMAC-SHA256 under a secret the deployment holds. A
+ * plain SHA-256 of an email is dictionary-recoverable — hash a candidate list,
+ * match the digests — so an unkeyed digest is not a pseudonym, and the EDPB's
+ * pseudonymisation guidance asks for a key. Nothing at the vendor can reverse it
+ * or join on it, which is the point. This is the default.
+ *
+ * `match_key` is the vendor's own contract: normalise, then unsalted SHA-256, so
+ * the vendor can match the digest against its own. It is a weaker disclosure —
+ * the same digest anyone else can compute from the address — so it is permitted
+ * only where a destination rule names the field as a vendor match key, and the
+ * audit records which of the two was applied.
+ */
+export const HashModeSchema = z.enum(['pseudonymize', 'match_key'])
+export type HashMode = z.infer<typeof HashModeSchema>
+
+/**
+ * Which vendor normalisation to apply before a match key is computed. An
+ * unsalted hash of an un-normalised value matches nothing either, so a
+ * `match_key` transformation has to say which form the field holds.
+ */
+export const NormalizeFormatSchema = z.enum(['email', 'phone'])
+export type NormalizeFormat = z.infer<typeof NormalizeFormatSchema>
+
+/**
+ * The category `getDefaultRule` gives a destination nobody declared, and the one
+ * category `hasConsent` refuses outright. A rule that arrived malformed is not a
+ * rule anyone consented to.
+ */
+export const UNKNOWN_DESTINATION_CATEGORY = 'unknown'
+
+/**
+ * One declared transformation on a destination rule.
+ *
+ * `mode` and `normalize` only mean anything to a hash, and a match key is only a
+ * match key where the rule says so: an unsalted digest that leaves the building
+ * has to be a deliberate, reviewable line in a rule rather than a global switch.
+ */
+export const TransformationSchema = z
+  .object({
+    path: z.string(), // JSON path (e.g., 'events.*.params.email')
+    action: TransformationActionSchema,
+    pattern: z.string().optional(), // Optional regex pattern for redaction
+    mode: HashModeSchema.optional(), // Hash only. Defaults to pseudonymize.
+    normalize: NormalizeFormatSchema.optional(), // Required by match_key.
+  })
+  .superRefine((transformation, ctx) => {
+    if (transformation.action !== 'hash') {
+      for (const field of ['mode', 'normalize'] as const) {
+        if (transformation[field] !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [field],
+            message: `${field} applies to a hash, not to ${transformation.action}`,
+          })
+        }
+      }
+      return
+    }
+    if (transformation.mode === 'match_key' && transformation.normalize === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['normalize'],
+        message: 'match_key needs a normalize format, or the digest matches nothing',
+      })
+    }
+  })
+
+export type Transformation = z.infer<typeof TransformationSchema>
+
+/**
  * Destination Rule Schema
  * Defines how a specific analytics/marketing destination should be handled.
  */
@@ -28,15 +100,7 @@ export const DestinationRuleSchema = z.object({
   category: z.string(), // e.g., 'analytics', 'marketing'
   endpoints: z.array(z.string()), // Domain patterns to match
   upstreamUrl: z.string().optional(), // Default URL to forward to
-  transformations: z
-    .array(
-      z.object({
-        path: z.string(), // JSON path (e.g., 'events.*.params.email')
-        action: TransformationActionSchema,
-        pattern: z.string().optional(), // Optional regex pattern for redaction
-      }),
-    )
-    .default([]),
+  transformations: z.array(TransformationSchema).default([]),
 })
 
 export type DestinationRule = z.infer<typeof DestinationRuleSchema>
@@ -67,13 +131,18 @@ export type PiiDetector = z.infer<typeof PiiDetectorSchema>
  * `matched` counts values changed — a wildcard path can exceed 1. Entries that
  * matched nothing are never recorded, and the value itself is never stored.
  * `detector` is present when the scanner found the data by value; its absence
- * means a declared rule path matched.
+ * means a declared rule path matched. `mode` accompanies a hash and says which
+ * of the two hashes was applied: a match key is a digest the vendor can join on
+ * and a pseudonym is not, so the two are materially different disclosures and
+ * must not read identically. It is absent on records written before the modes
+ * existed, which is what an absent field should mean rather than a default.
  */
 export const TransformationRecordSchema = z.object({
   path: z.string(),
   action: TransformationActionSchema,
   matched: z.number().int().positive(),
   detector: PiiDetectorSchema.optional(),
+  mode: HashModeSchema.optional(),
 })
 
 export type TransformationRecord = z.infer<typeof TransformationRecordSchema>
@@ -159,6 +228,7 @@ export const RuleHealthSchema = z.object({
     z.object({
       path: z.string(),
       action: TransformationActionSchema,
+      mode: HashModeSchema.optional(),
       matched: z.number().int().nonnegative(),
       lastFiredAt: z.string().nullable(),
     }),

@@ -29,7 +29,9 @@ const COLUMNS = [
  * regulator's email.
  *
  * `transformations` is flattened to `action path ×n (source)` — enough to read
- * without a JSON parser, and still never the removed value itself.
+ * without a JSON parser, and still never the removed value itself. A hash says
+ * which hash: a match key is a digest the vendor can join on, a pseudonym is
+ * not, and a reader cannot tell them apart from the word "hash".
  */
 export function toCsv(records: SealedAuditRecord[]): string {
   const rows = records.map((record) =>
@@ -43,7 +45,10 @@ export function toCsv(records: SealedAuditRecord[]): string {
       record.purposesRequired ?? '',
       (record.purposesGranted ?? []).join(' '),
       record.transformations
-        .map((t) => `${t.action} ${t.path} ×${t.matched} (${t.detector ?? 'declared'})`)
+        .map(
+          (t) =>
+            `${t.action}${t.mode ? `:${t.mode}` : ''} ${t.path} ×${t.matched} (${t.detector ?? 'declared'})`,
+        )
         .join('; '),
       record.prevHash,
       record.hash,

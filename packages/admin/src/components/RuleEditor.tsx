@@ -24,9 +24,19 @@ export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
     setEditedRule({ ...editedRule, transformations: newTransforms })
   }
 
+  /**
+   * `mode` and `normalize` belong to a hash and are rejected by the rule schema
+   * anywhere else, so moving a declared match key onto another action drops
+   * them rather than saving a rule the proxy would refuse.
+   */
   const updateTransformation = (index: number, field: string, value: string) => {
     const newTransforms = [...editedRule.transformations]
-    newTransforms[index] = { ...newTransforms[index], [field]: value }
+    const updated = { ...newTransforms[index], [field]: value }
+    if (field === 'action' && value !== 'hash') {
+      delete updated.mode
+      delete updated.normalize
+    }
+    newTransforms[index] = updated
     setEditedRule({ ...editedRule, transformations: newTransforms })
   }
 
@@ -87,6 +97,17 @@ export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
                     <option value="hash">Hash</option>
                     <option value="redact">Redact</option>
                   </select>
+                  {t.mode === 'match_key' && (
+                    // Read-only on purpose: an unsalted digest the vendor can
+                    // join on is a decision that belongs in a reviewed rule, not
+                    // in a dropdown. Removing the row removes the match key.
+                    <span
+                      title={`Vendor match key, normalised as ${t.normalize}. Unsalted — the vendor can match this digest.`}
+                      style={{ fontSize: '11px', color: 'var(--accents-5)', whiteSpace: 'nowrap' }}
+                    >
+                      match key · {t.normalize}
+                    </span>
+                  )}
                   {t.action === 'redact' && (
                     <input
                       type="text"

@@ -116,7 +116,7 @@ be checking a signature over it.
 Resolved by item 5: the buffer stored `originalUrl` with its query string intact, so
 personal data sat in storage for a user with no consent record. Buffering is deleted.
 
-### 4. Close the interception holes — **done, except identity**
+### 4. Close the interception holes — **done**
 
 Items 1–3 all improved what happens to a request once it arrives. None of that reaches
 a request that never arrives, and the pixel transport never did.
@@ -145,11 +145,10 @@ Interception alone would not have been enough. Three things were found in the pr
   pathname. Folded in here rather than split out, because intercepting more pixels would
   have made it strictly worse.
 
-Still open, and deliberately separated: **stop minting a persistent `cuid` cookie before
-consent exists**. `getOrSetUserId` writes a 365-day cookie and a `localStorage` entry on
-page load. It needs a session-scoped identifier promoted to a persistent one only on a
-consent grant, which touches the server's identity resolution and the consent gate — an
-identity change, not an interception one.
+Carried out in item 8: **stop minting a persistent `cuid` cookie before consent exists**.
+It needed a session-scoped identifier promoted to a persistent one only on a consent
+grant, which touches the server's identity resolution and the consent gate — an identity
+change, not an interception one.
 
 ### 5. Shut the open door — **done**
 
@@ -205,7 +204,9 @@ literal `<PIXEL_ID>` in its `upstreamUrl`.
 Either write the adapter or remove the entry. A registry that lists destinations it
 cannot serve is the same class of dishonesty as the audit bug in item 1.
 
-Priority order if adapters get written: Meta CAPI, then Mixpanel.
+Priority order if adapters get written: Meta CAPI, then Mixpanel. Item 8 laid the
+groundwork for the first: `facebook.ts` declares `em` and `ph` as vendor match keys, so a
+CAPI adapter has the hashing contract it needs and only has to build the request.
 
 Note that until then those five destinations forward nowhere: the passthrough now has to
 satisfy the egress allowlist, and `facebook.ts`'s `<PIXEL_ID>` upstream still cannot
@@ -270,6 +271,65 @@ Still open: `/api/rule-health` joins the audit against `RuleManager.getAllRules(
 only iterates `REGISTRY_KEYS`, so an override for an id the registry does not know gets
 no health row — `StorageProvider` cannot enumerate keys. And a query reads one day's
 segment whole, which is fine at the traffic this is built for and not at ten times it.
+
+### 8. Decide what a hash is for — **done**
+
+The one slice where the code and its own comments disagreed. `detectors/patterns.ts`
+justified hashing an email rather than stripping it — "Meta and Google both accept a
+pre-hashed email for identity resolution, so the event survives without carrying the
+address" — while `applyHash` appended a salt. Meta's Conversions API specifies
+normalise-then-SHA-256 with no salt, so every hashed `em` and `ph` was a well-formed
+digest that matched nobody. The event did not survive; it failed quietly, and the audit
+recorded a successful transformation.
+
+Removing the salt was not the fix. A plain SHA-256 of an email is dictionary-recoverable
+— hash a candidate list, match the digests — so keyed hashing is what pseudonymisation
+actually asks for, and hashed data stays personal data either way. Both positions were
+right. They are two jobs, and one function was doing both.
+
+There are now two named modes on the transformation schema. `pseudonymize` is
+HMAC-SHA256 under `SLUICE_HASH_SECRET` and is the default. `match_key` is the vendor's
+contract — per-vendor normalisation, then unsalted SHA-256 — and is permitted only on a
+field a destination rule declares as one, which makes the weaker disclosure a reviewable
+line in a rule rather than a global setting. `facebook.ts` declares two: `em` and `ph`.
+The value scan always pseudonymises, because a field found by shape at a path nobody
+declared has been reviewed by nobody. Normalisation is pinned against Meta's documented
+forms in the test suite, so drift fails the gate rather than the campaign, and a match key
+whose value will not normalise is stripped rather than hashed — the digest of an empty
+string is a constant that would read as a real identity. The audit carries the mode: a
+`match_key` entry and a `pseudonymize` entry are materially different disclosures.
+
+Three things were fixed alongside it:
+
+- **The salt defaulted, and was read from the wrong place.** `SLUICE_HASH_SALT` fell back
+  to the literal `default-salt`, and `applyHash` read `process.env` rather than the env
+  the app was constructed with — so on the Cloudflare Workers provider this repo ships it
+  fell through to a second hardcoded literal, `sluice-default-salt-12345`. A published
+  default is not a secret: anyone holding this repository could hash a candidate list and
+  match it back. There is no default now; outside development a missing
+  `SLUICE_HASH_SECRET` is a fatal start-up error naming the variable, in development it is
+  minted per process, and `sluice init` writes one into the compose file it generates. The
+  hasher is built once at construction rather than reconstructing the whole server config
+  per hashed field per request.
+- **The identifier was minted before consent existed.** `getOrSetUserId` wrote a 365-day
+  cookie and a `localStorage` entry on page load — a persistent tracking identifier stored
+  with no consent record anywhere, which is an ePrivacy Art. 5(3) problem in a tool whose
+  whole point is compliance. The `localStorage` copy survived the user deleting their
+  cookies, and Safari caps a cookie set via `document.cookie` at seven days regardless, so
+  the 365-day expiry was fiction there and a real liability everywhere else. The client now
+  keeps a `sessionStorage` identifier that dies with the tab and removes the old persistent
+  one on sight; the server promotes it to an `HttpOnly` first-party cookie only once a
+  consent record exists, and resolves identity from that cookie ahead of anything the page
+  says about itself.
+- **`getDefaultRule` failed open.** It returned `category: 'necessary'`, which `hasConsent`
+  grants unconditionally — reachable whenever a rule override exists for an id the registry
+  does not know and will not parse. It now returns `unknown`, which `hasConsent` refuses as
+  unconditionally as it grants `necessary`, so a CMP configured with a purpose by that name
+  cannot re-open the branch.
+
+Still open: `sessionStorage` is still storage on a visitor's device before any consent
+record exists. It dies with the tab and is promoted to nothing, but whether the firewall's
+own routing identifier is strictly necessary is a judgement call rather than a settled one.
 
 ## Non-goals
 

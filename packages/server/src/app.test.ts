@@ -289,7 +289,7 @@ describe('Sluice server', () => {
       expect(entry.decision).toBe('forwarded')
       expect(entry.transformations).toEqual([
         { path: 'email', action: 'strip', matched: 1 },
-        { path: 'phone', action: 'hash', matched: 1 },
+        { path: 'phone', action: 'hash', mode: 'pseudonymize', matched: 1 },
       ])
     })
 
@@ -358,7 +358,13 @@ describe('Sluice server', () => {
 
       const entry = await latestAudit(app)
       expect(entry.transformations).toEqual([
-        { path: 'custom_field_7', action: 'hash', matched: 1, detector: 'email' },
+        {
+          path: 'custom_field_7',
+          action: 'hash',
+          mode: 'pseudonymize',
+          matched: 1,
+          detector: 'email',
+        },
         { path: 'client_ip', action: 'strip', matched: 1, detector: 'ipv4' },
       ])
     })
@@ -411,7 +417,7 @@ describe('Sluice server', () => {
       const entry = await latestAudit(app)
       expect(entry.decision).toBe('forwarded')
       expect(entry.transformations).toEqual([
-        { path: '?em', action: 'hash', matched: 1, detector: 'email' },
+        { path: '?em', action: 'hash', mode: 'pseudonymize', matched: 1, detector: 'email' },
         { path: '?ip', action: 'strip', matched: 1, detector: 'ipv4' },
       ])
     })
@@ -766,7 +772,7 @@ describe('Sluice server', () => {
       const entry = await latestAudit(app)
       expect(entry.decision).toBe('forwarded')
       expect(entry.transformations).toEqual([
-        { path: '?em', action: 'hash', matched: 1, detector: 'email' },
+        { path: '?em', action: 'hash', mode: 'pseudonymize', matched: 1, detector: 'email' },
         { path: '?ip', action: 'strip', matched: 1, detector: 'ipv4' },
       ])
     })
@@ -1084,5 +1090,255 @@ describe('Sluice server', () => {
         status: 'intact',
       })
     })
+  })
+})
+
+/**
+ * A rule override that will not parse is dropped in favour of the registry when
+ * it is read, so a `200` on the way in would be a save that changed nothing.
+ */
+describe('rule override validation', () => {
+  const ENV = { NODE_ENV: 'test', ADMIN_SECRET: 'test-admin' }
+
+  function put(app: ReturnType<typeof createApp>, rule: unknown) {
+    return app.request('/api/rules/testvendor', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+      body: JSON.stringify(rule),
+    })
+  }
+
+  it('rejects a match key that names no format, rather than storing it', async () => {
+    const app = createApp(new MemoryStorageProvider(), ENV)
+    const res = await put(app, {
+      category: 'marketing',
+      endpoints: ['api.vendor.test'],
+      transformations: [{ path: 'em', action: 'hash', mode: 'match_key' }],
+    })
+    expect(res.status).toBe(400)
+
+    const rules = await app.request('/api/rules', {
+      headers: { Authorization: 'Bearer test-admin' },
+    })
+    expect(((await rules.json()) as any).some((r: any) => r.id === 'testvendor')).toBe(false)
+  })
+
+  it('saves a well-formed one', async () => {
+    const app = createApp(new MemoryStorageProvider(), ENV)
+    const res = await put(app, {
+      category: 'marketing',
+      endpoints: ['api.vendor.test'],
+      transformations: [{ path: 'em', action: 'hash', mode: 'match_key', normalize: 'email' }],
+    })
+    expect(res.status).toBe(200)
+  })
+})
+
+/**
+ * Identity, and when a persistent one may be created.
+ *
+ * The client used to mint a 365-day cookie plus a `localStorage` copy on page
+ * load, before any consent record existed — a persistent tracking identifier
+ * stored without consent, in a tool whose whole point is compliance. The
+ * identifier the browser sends is now session-scoped; making one persistent is
+ * this server's decision, and only for a user a consent record already exists
+ * for.
+ */
+describe('identity promotion', () => {
+  const ENV = { NODE_ENV: 'test', ADMIN_SECRET: 'test-admin', SLUICE_DEFAULT_CONSENT: 'deny' }
+  const SINK = 'https://sink.example.com/collect'
+  let storage: MemoryStorageProvider
+  let upstream: ReturnType<typeof vi.fn>
+  let realFetch: typeof globalThis.fetch
+
+  async function seedRule(app: ReturnType<typeof createApp>) {
+    await app.request('/api/rules/testvendor', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+      body: JSON.stringify({
+        id: 'testvendor',
+        category: 'analytics',
+        endpoints: ['sink.example.com'],
+        upstreamUrl: SINK,
+        transformations: [],
+      }),
+    })
+  }
+
+  async function grantConsent(app: ReturnType<typeof createApp>, userId: string) {
+    await app.request(`/consent/${userId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+      body: JSON.stringify({ purposes: { analytics: true }, timestamp: Date.now() }),
+    })
+  }
+
+  function ingest(app: ReturnType<typeof createApp>, headers: Record<string, string>) {
+    return app.request('/ingest/testvendor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ event: 'page_view' }),
+    })
+  }
+
+  beforeEach(() => {
+    storage = new MemoryStorageProvider()
+    realFetch = globalThis.fetch
+    upstream = vi.fn(async () => new Response(null, { status: 200 }))
+    globalThis.fetch = upstream as unknown as typeof fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  it('sets no cookie for a session id with no consent record behind it', async () => {
+    const app = createApp(storage, ENV)
+    await seedRule(app)
+
+    const res = await ingest(app, { 'X-Consent-UserId': 'session-abc' })
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Set-Cookie')).toBeNull()
+    expect(upstream).not.toHaveBeenCalled()
+  })
+
+  it('mints no cookie for a destination consent never had to grant', async () => {
+    const app = createApp(storage, ENV)
+    // `necessary` is granted unconditionally, so this request forwards without
+    // any consent record existing. That is exactly where a persistent
+    // identifier must still not be created: nobody has been asked anything.
+    await app.request('/api/rules/essential', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+      body: JSON.stringify({
+        id: 'essential',
+        category: 'necessary',
+        endpoints: ['sink.example.com'],
+        upstreamUrl: SINK,
+        transformations: [],
+      }),
+    })
+
+    const res = await app.request('/ingest/essential', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'session-abc' },
+      body: JSON.stringify({ event: 'page_view' }),
+    })
+
+    expect(res.status).toBe(204)
+    expect(upstream).toHaveBeenCalled()
+    expect(res.headers.get('Set-Cookie')).toBeNull()
+  })
+
+  it('promotes the session id to a first-party cookie once consent exists', async () => {
+    const app = createApp(storage, ENV)
+    await seedRule(app)
+    await grantConsent(app, 'session-abc')
+
+    const res = await ingest(app, { 'X-Consent-UserId': 'session-abc' })
+    expect(res.status).toBe(204)
+    const cookie = res.headers.get('Set-Cookie')
+    expect(cookie).toContain('cuid=session-abc')
+    expect(cookie).toContain('HttpOnly')
+    expect(cookie).toContain('Max-Age=31536000')
+  })
+
+  it('does not re-issue the cookie to a browser that already holds it', async () => {
+    const app = createApp(storage, ENV)
+    await seedRule(app)
+    await grantConsent(app, 'session-abc')
+
+    const res = await ingest(app, { Cookie: 'cuid=session-abc' })
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Set-Cookie')).toBeNull()
+  })
+
+  /**
+   * The cookie is the identity this server promoted; the header is whatever the
+   * page says about itself. Once one exists, the page cannot rename the user it
+   * is reporting on — and it cannot read the cookie to find out either.
+   */
+  it('resolves identity from its own cookie ahead of the page-supplied header', async () => {
+    const app = createApp(storage, ENV)
+    await seedRule(app)
+    await grantConsent(app, 'promoted-user')
+
+    const res = await ingest(app, {
+      Cookie: 'cuid=promoted-user',
+      'X-Consent-UserId': 'a-different-id',
+    })
+    expect(res.status).toBe(204)
+    expect(upstream).toHaveBeenCalled()
+
+    const audit = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
+    expect(((await audit.json()) as any).records[0].userId).toBe('promoted-user')
+  })
+
+  it('marks the cookie Secure outside development', async () => {
+    const app = createApp(storage, { ...ENV, NODE_ENV: 'production', SLUICE_HASH_SECRET: 'k' })
+    await seedRule(app)
+    await grantConsent(app, 'session-abc')
+
+    const res = await ingest(app, { 'X-Consent-UserId': 'session-abc' })
+    expect(res.headers.get('Set-Cookie')).toContain('Secure')
+  })
+})
+
+/**
+ * `getDefaultRule` used to answer `category: 'necessary'`, which `hasConsent`
+ * grants unconditionally — a fail-open branch in a system whose first invariant
+ * is fail-closed, reachable through a rule override that will not parse.
+ */
+describe('a destination whose rule could not be read', () => {
+  const ENV = { NODE_ENV: 'test', ADMIN_SECRET: 'test-admin', SLUICE_DEFAULT_CONSENT: 'deny' }
+  let storage: MemoryStorageProvider
+  let upstream: ReturnType<typeof vi.fn>
+  let realFetch: typeof globalThis.fetch
+
+  beforeEach(() => {
+    storage = new MemoryStorageProvider()
+    realFetch = globalThis.fetch
+    upstream = vi.fn(async () => new Response(null, { status: 200 }))
+    globalThis.fetch = upstream as unknown as typeof fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  it('is blocked for consent, not waved through as necessary', async () => {
+    const app = createApp(storage, ENV)
+    // An override that exists — so the destination is supported — but does not
+    // parse, which is what drops the request onto the default rule.
+    await storage.set('rule_override:mystery', JSON.stringify({ id: 'mystery', category: 42 }))
+    await app.request('/consent/curious-user', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+      body: JSON.stringify({
+        // Including a purpose named after the category the default rule uses:
+        // the refusal has to be unconditional, or a CMP configured with an
+        // "unknown" purpose re-opens the branch.
+        purposes: { analytics: true, marketing: true, necessary: true, unknown: true },
+        timestamp: Date.now(),
+      }),
+    })
+
+    const res = await app.request('/ingest/mystery', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Consent-UserId': 'curious-user',
+        'X-Original-Url': 'https://mystery.example.com/collect?em=alice@example.com',
+      },
+      body: JSON.stringify({ event: 'page_view' }),
+    })
+
+    expect(res.status).toBe(204)
+    expect(upstream).not.toHaveBeenCalled()
+
+    const audit = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
+    const entry = ((await audit.json()) as any).records[0]
+    expect(entry.decision).toBe('blocked')
+    expect(entry.reason).toBe('consent_missing')
   })
 })

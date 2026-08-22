@@ -16,6 +16,8 @@ export interface SluiceConfig {
   port: number
   redisUrl: string
   adminSecret: string
+  /** The key every pseudonymising hash is taken under. Never prompted for. */
+  hashSecret: string
   allowedOrigins: string[]
 }
 
@@ -32,6 +34,20 @@ export const INIT_DEFAULTS = {
  * the operator has to lose it deliberately rather than by pressing enter.
  */
 export function generateAdminSecret(): string {
+  return randomSecret()
+}
+
+/**
+ * The hash secret for a new install, always generated and never offered as a
+ * default. The proxy refuses to start without one outside development, and a
+ * shared default would make every install's pseudonyms comparable with every
+ * other's — the property keyed hashing exists to remove.
+ */
+export function generateHashSecret(): string {
+  return randomSecret()
+}
+
+function randomSecret(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
@@ -56,6 +72,7 @@ export function buildConfig(answers: InitAnswers): SluiceConfig {
     port: answers.port ?? INIT_DEFAULTS.port,
     redisUrl: answers.redisUrl || INIT_DEFAULTS.redisUrl,
     adminSecret: answers.adminSecret || generateAdminSecret(),
+    hashSecret: generateHashSecret(),
     allowedOrigins: parseOrigins(answers.allowedOrigins),
   }
 }
@@ -72,6 +89,7 @@ export function renderCompose(config: SluiceConfig): string {
     `      - PORT=${config.port}`,
     '      - REDIS_URL=redis://redis:6379',
     `      - ADMIN_SECRET=${config.adminSecret}`,
+    `      - SLUICE_HASH_SECRET=${config.hashSecret}`,
     `      - SLUICE_ALLOWED_ORIGINS=${config.allowedOrigins.join(',')}`,
     '      - SLUICE_ENABLE_CACHE=true',
     '      - GA4_MEASUREMENT_ID=',

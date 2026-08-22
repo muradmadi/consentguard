@@ -18,7 +18,7 @@ export interface ClientConfig {
   destinations?: Record<string, string>
   /** Extra domains to treat as tracking; matched requests are proxied under destination "unknown". */
   domains?: string[]
-  /** Pin the user id instead of the persistent cuid cookie. */
+  /** Pin the user id instead of the per-session one. */
   userId?: string
   /** If true, watch for dynamically injected <script> tags and neutralize known trackers. */
   observeMutations?: boolean
@@ -27,15 +27,12 @@ export interface ClientConfig {
    * Off by default — fail-closed behavior is safer for a privacy tool.
    */
   dangerouslyAllowOnError?: boolean
-  /** Cookie name storing the persistent user id. Default: cuid. */
-  cookieName?: string
 }
 
 interface ResolvedConfig extends ClientConfig {
   destinations: Record<string, string>
   observeMutations: boolean
   dangerouslyAllowOnError: boolean
-  cookieName: string
 }
 
 /** 1x1 transparent GIF. Assigned instead of a vendor URL when routing fails. */
@@ -46,21 +43,13 @@ const DEFAULTS = {
   destinations: INTERCEPTION_PATTERNS,
   observeMutations: true,
   dangerouslyAllowOnError: false,
-  cookieName: 'cuid',
 }
 
-function getCookie(name: string): string | null {
-  if (typeof document === 'undefined') return null
-  const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'))
-  return match ? decodeURIComponent(match[2]) : null
-}
+/** Where the session identifier lives. Cleared by the browser with the tab. */
+const SESSION_KEY = 'sluice_session_id'
 
-function setCookie(name: string, value: string, days = 365) {
-  if (typeof document === 'undefined') return
-  const date = new Date()
-  date.setTime(date.getTime() + days * 24 * 60 * 60 * 1000)
-  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; expires=${date.toUTCString()}; SameSite=Lax`
-}
+/** The persistent id earlier versions wrote on page load, removed on sight. */
+const LEGACY_PERSISTENT_KEY = 'sluice_user_id'
 
 function getConfigFromMeta(): Partial<ClientConfig> {
   if (typeof document === 'undefined') return {}
@@ -87,28 +76,67 @@ function resolveProxyBase(config: ResolvedConfig): string {
   return `${origin}${path}`
 }
 
-function getOrSetUserId(config: ResolvedConfig): string {
+/**
+ * A per-session identifier, and nothing that outlives the session.
+ *
+ * This used to write a 365-day cookie and a `localStorage` entry on page load,
+ * before any consent record existed — storing a persistent tracking identifier
+ * without consent, which is an ePrivacy Art. 5(3) problem in a tool whose whole
+ * point is compliance, and which the `localStorage` copy made survive the user
+ * deleting their cookies. It was also fiction on Safari, where a cookie set from
+ * `document.cookie` is capped at seven days whatever expiry it names.
+ *
+ * The identifier now lives in `sessionStorage` and dies with the tab. Making it
+ * persistent is the server's decision and only after a consent record exists:
+ * it answers with a first-party `Set-Cookie`, which the browser then sends on
+ * every proxied request ahead of anything the page says about itself.
+ */
+function getSessionUserId(config: ResolvedConfig): string {
   if (config.userId) return config.userId
   if (typeof window === 'undefined') return 'server'
 
-  const cookieName = config.cookieName
-  const existing = getCookie(cookieName)
-  if (existing) return existing
+  forgetLegacyPersistentId()
 
-  const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('sluice_user_id') : null
-  if (stored) {
-    setCookie(cookieName, stored)
-    return stored
-  }
+  const existing = readSession()
+  if (existing) return existing
 
   const id =
     typeof crypto !== 'undefined' && crypto.randomUUID
       ? crypto.randomUUID()
       : 'u_' + Math.random().toString(36).substring(2, 15)
 
-  setCookie(cookieName, id)
-  if (typeof localStorage !== 'undefined') localStorage.setItem('sluice_user_id', id)
+  writeSession(id)
   return id
+}
+
+/**
+ * Storage access throws outright when a browser is set to block site data, so
+ * every read and write here is guarded. A visitor who blocks storage gets a new
+ * identifier per page and no complaint, which is the correct outcome.
+ */
+function readSession(): string | null {
+  try {
+    return sessionStorage.getItem(SESSION_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeSession(id: string): void {
+  try {
+    sessionStorage.setItem(SESSION_KEY, id)
+  } catch {
+    // Nothing to do: the id is still used for this page load.
+  }
+}
+
+/** An identifier stored without consent is not one to keep once we know better. */
+function forgetLegacyPersistentId(): void {
+  try {
+    localStorage.removeItem(LEGACY_PERSISTENT_KEY)
+  } catch {
+    // Blocked storage holds nothing to remove.
+  }
 }
 
 export function init(config?: Partial<ClientConfig>) {
@@ -128,11 +156,13 @@ export function init(config?: Partial<ClientConfig>) {
     })
   }
 
-  const userId = getOrSetUserId(resolved)
+  const userId = getSessionUserId(resolved)
   const proxyBase = resolveProxyBase(resolved)
   const ingestBase = `${proxyBase}/ingest`
 
-  // Expose the resolved identity for debugging. No secrets, and nothing
+  // Expose the resolved identity for debugging. This is the session id the
+  // page minted; once consent has promoted one, the server's HttpOnly cookie
+  // outranks it and the page cannot read that. No secrets, and nothing
   // writable: a page cannot assert its own consent.
   ;(window as any).Sluice = { userId, proxyBase }
 

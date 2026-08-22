@@ -44,17 +44,43 @@ const parsePositiveInt = (raw: unknown, fallback: number): number => {
  */
 let generatedDevSecret: string | undefined
 
+const randomSecret = (): string =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
+
 const developmentAdminSecret = (): string => {
   if (!generatedDevSecret) {
-    generatedDevSecret =
-      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
+    generatedDevSecret = randomSecret()
     console.warn(
       `[Sluice] ADMIN_SECRET is not set. Generated a development admin token for this process: ${generatedDevSecret}`,
     )
   }
   return generatedDevSecret
+}
+
+/**
+ * The key behind every pseudonymising hash.
+ *
+ * It used to be a salt that defaulted to the literal `default-salt`, with a
+ * second literal behind that one in the transformation itself. A published
+ * default is not a secret: anyone holding this repository could hash a candidate
+ * list of addresses and match the digests back, which is exactly the attack
+ * keyed hashing exists to stop. There is no safe default, so outside development
+ * there is no default — and in development it is minted per process, which means
+ * pseudonyms are not comparable across restarts and is why it is not the way to
+ * run this for real.
+ */
+let generatedDevHashSecret: string | undefined
+
+const developmentHashSecret = (): string => {
+  if (!generatedDevHashSecret) {
+    generatedDevHashSecret = randomSecret()
+    console.warn(
+      '[Sluice] SLUICE_HASH_SECRET is not set. Generated one for this process; pseudonymised values will not be stable across restarts.',
+    )
+  }
+  return generatedDevHashSecret
 }
 
 /** A boolean env var, where anything but an explicit `false` means on. */
@@ -114,6 +140,19 @@ export const getServerConfig = (env: any = {}) => {
     )
   }
 
+  if (env.SLUICE_HASH_SALT) {
+    console.warn(
+      '[Sluice] SLUICE_HASH_SALT is no longer read. Hashing is keyed now: set SLUICE_HASH_SECRET.',
+    )
+  }
+  const hashSecret =
+    env.SLUICE_HASH_SECRET || env.hashSecret || (isDev ? developmentHashSecret() : undefined)
+  if (!hashSecret) {
+    throw new Error(
+      'FATAL: SLUICE_HASH_SECRET is missing. Sluice cannot start in a non-dev environment without it: an unkeyed hash of an email is recoverable from a dictionary.',
+    )
+  }
+
   const auditDirRaw = env.SLUICE_AUDIT_DIR ?? env.auditDir
   const auditDir = auditDirRaw === undefined ? DEFAULT_AUDIT_DIR : String(auditDirRaw).trim()
 
@@ -137,7 +176,7 @@ export const getServerConfig = (env: any = {}) => {
       DEFAULT_MAX_BODY_BYTES,
     ),
     env: nodeEnv,
-    hashSalt: env.SLUICE_HASH_SALT || env.hashSalt || 'default-salt',
+    hashSecret,
     enableCache: env.SLUICE_ENABLE_CACHE === 'true' || env.enableCache === true,
     cacheTtl: parseInt(env.SLUICE_CACHE_TTL || env.cacheTtl || '60000'),
     defaultConsent: env.SLUICE_DEFAULT_CONSENT || env.defaultConsent || 'deny',
