@@ -1,6 +1,0 @@
-{
-  "port": 3000,
-  "redisUrl": "redis://localhost:6379",
-  "adminSecret": "dev-admin-secret",
-  "allowedOrigins": ["http://localhost:3000"]
-}
