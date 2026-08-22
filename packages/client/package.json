@@ -1,8 +1,9 @@
 {
   "name": "@sluice/client",
+  "private": true,
   "version": "0.0.0-dev",
   "main": "dist/sluice.cjs.js",
-  "module": "dist/sluice.esm.js",
+  "module": "dist/sluice.es.js",
   "unpkg": "dist/sluice.iife.js",
   "types": "dist/index.d.ts",
   "scripts": {
