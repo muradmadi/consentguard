@@ -5,6 +5,7 @@ import prompts from 'prompts'
 import * as fs from 'fs'
 import * as path from 'path'
 import { spawn } from 'child_process'
+import { buildConfig, renderCompose } from './config'
 
 declare const __CLI_VERSION__: string
 
@@ -48,15 +49,7 @@ program
       },
     ])
 
-    const config = {
-      port: response.port,
-      redisUrl: response.redisUrl,
-      adminSecret: response.adminSecret,
-      allowedOrigins: (response.allowedOrigins || '')
-        .split(',')
-        .map((s: string) => s.trim())
-        .filter(Boolean),
-    }
+    const config = buildConfig(response)
 
     const configPath = path.join(process.cwd(), '.sluicerc.json')
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
@@ -70,32 +63,7 @@ program
     })
 
     if (generateProduction.value) {
-      const originsEnv = config.allowedOrigins.join(',')
-      const compose = [
-        'services:',
-        '  proxy:',
-        '    build: .',
-        `    ports:`,
-        `      - "${config.port}:${config.port}"`,
-        '    environment:',
-        `      - PORT=${config.port}`,
-        '      - REDIS_URL=redis://redis:6379',
-        `      - ADMIN_SECRET=${config.adminSecret}`,
-        `      - SLUICE_ALLOWED_ORIGINS=${originsEnv}`,
-        '      - SLUICE_ENABLE_CACHE=true',
-        '      - GA4_MEASUREMENT_ID=',
-        '      - GA4_API_SECRET=',
-        '    depends_on:',
-        '      - redis',
-        '  redis:',
-        '    image: redis:7-alpine',
-        '    volumes:',
-        '      - redis_data:/data',
-        'volumes:',
-        '  redis_data:',
-        '',
-      ].join('\n')
-      fs.writeFileSync(path.join(process.cwd(), 'docker-compose.yml'), compose)
+      fs.writeFileSync(path.join(process.cwd(), 'docker-compose.yml'), renderCompose(config))
       console.log(pc.green(`Created ${pc.bold('docker-compose.yml')}`))
     }
 
@@ -157,7 +125,7 @@ program
   .action(async (options) => {
     console.log(pc.cyan('🛡️  Streaming Sluice Logs... (Ctrl+C to stop)\n'))
 
-    let lastTimestamp = ''
+    let lastTimestamp = 0
     const secret = options.secret || process.env.ADMIN_SECRET || 'dev-admin-secret'
 
     const poll = async () => {

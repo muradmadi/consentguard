@@ -10,6 +10,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "lint": "eslint .",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js"
   },
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@types/prompts": "^2.4.9",
     "tsup": "^8.0.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11"
   }
 }
