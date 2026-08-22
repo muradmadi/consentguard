@@ -48,3 +48,6 @@ ehthumbs.db
 .eslintcache
 .stylelintcache
 .vite/
+
+# Claude Code personal overrides (shared config is .claude/settings.json)
+.claude/settings.local.json
