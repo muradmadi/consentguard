@@ -96,6 +96,12 @@ Create `packages/server/src/destinations/adapters/<vendor>.ts` implementing
 - Return `{ skip: true, reason }` when required credentials are missing, rather than
   forwarding something incomplete. The caller turns that into a clean `204`.
 
+The URL is not your problem: `buildForward` puts every forward's URL through `scrubUrl`
+before it is fetched, so a query string you build — or one you carry over from
+`ctx.originalUrl` — is scrubbed by the same passes as the body, and its findings are
+appended to your `report` with a `?` prefix. Do not scrub it yourself; you would
+double-count it in the audit.
+
 Credentials go in `getServerConfig` (`packages/server/src/config.ts`) as a namespaced
 block, read from env with a `''` default — never a hardcoded fallback.
 

@@ -358,6 +358,52 @@ describe('Sluice server', () => {
       expect((await latestAudit(app)).transformations).toEqual([])
     })
 
+    it('scrubs the query string of the url it forwards to, not just the body', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await app.request('/ingest/testvendor', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Consent-UserId': 'clean-user',
+          'X-Original-Url':
+            'https://api.vendor.test/track?em=alice@example.com&ip=203.0.113.9&e=purchase',
+        },
+        body: JSON.stringify({ event: 'purchase' }),
+      })
+      expect(res.status).toBe(204)
+
+      const sent = new URL(String(upstream.mock.calls[0][0]))
+      expect(sent.searchParams.get('em')).toMatch(/^[0-9a-f]{64}$/)
+      expect(sent.searchParams.has('ip')).toBe(false)
+      expect(sent.searchParams.get('e')).toBe('purchase')
+
+      const entry = await latestAudit(app)
+      expect(entry.decision).toBe('forwarded')
+      expect(entry.transformations).toEqual([
+        { path: '?em', action: 'hash', matched: 1, detector: 'email' },
+        { path: '?ip', action: 'strip', matched: 1, detector: 'ipv4' },
+      ])
+    })
+
+    it('never lets the query string value reach the audit record', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await app.request('/ingest/testvendor', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Consent-UserId': 'clean-user',
+          'X-Original-Url': 'https://api.vendor.test/track?em=alice@example.com',
+        },
+        body: JSON.stringify({ event: 'purchase' }),
+      })
+
+      expect(JSON.stringify(await latestAudit(app))).not.toContain('alice@example.com')
+    })
+
     it('refuses to forward a body it cannot parse and therefore cannot scrub', async () => {
       const app = createApp(storage, DEV_ENV)
       await seed(app)

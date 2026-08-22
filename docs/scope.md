@@ -92,7 +92,31 @@ Every pattern is deliberately conservative about separators: a bare run of digit
 order id far more often than a phone number or a card. False positives corrupt analytics
 data, which is how a firewall gets switched off.
 
-### 3. Close the interception holes
+### 3. Scrub the URL, not just the body — **done**
+
+Found while looking at item 4, and it outranked it. The generic passthrough forwarded to
+`ctx.originalUrl` — the URL the browser had originally targeted — verbatim. Only the body
+went through `scrubPayload`. A beacon to `…/track?em=alice@example.com&ip=203.0.113.9`
+therefore reached the vendor with both intact, and the audit recorded
+`decision: 'forwarded'`, `transformations: []`: true, and damning. It affected every
+destination without an adapter, which is six of the seven in the registry.
+
+`engine/url.ts` now runs the query string through `scrubPayload` with each parameter as a
+field, so declared paths and the value scan both apply to it, and `buildForward` puts
+every forward's URL through it — including a URL an adapter built for itself, so there is
+no branch where it can be forgotten. Audit entries from the URL are prefixed `?`
+(`?em`, `?ip`), which no dotted body path can collide with.
+
+Two deliberate limits. The path is left alone: it addresses the vendor's API rather than
+carrying payload, and rewriting a segment changes what is being called. And a URL is
+returned byte-identical when nothing fires, rather than re-encoded, because a vendor may
+be checking a signature over it.
+
+Still open, and out of this commit: the buffer stores `originalUrl` with its query string
+intact, so personal data sits in storage for a user with no consent record. Deleting
+buffering (see **Remove**) resolves it.
+
+### 4. Close the interception holes
 
 - Intercept `<img>` requests — `Image.prototype.src` and `setAttribute('src', …)` on
   `HTMLImageElement`. Without this the Meta pixel is entirely uncovered.
@@ -100,7 +124,7 @@ data, which is how a firewall gets switched off.
 - Stop minting a persistent `cuid` cookie before consent exists. Use a session-scoped
   identifier that is promoted to a persistent one only on a consent grant.
 
-### 4. Make the registry honest
+### 5. Make the registry honest
 
 `adapters/index.ts` registers exactly one adapter (GA4). Five other destinations are
 listed in the registry and cannot forward to their real vendor — `facebook.ts` has a

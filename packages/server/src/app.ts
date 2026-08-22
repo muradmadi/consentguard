@@ -6,6 +6,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { ConsentStateSchema } from '@sluice/shared'
 import { ConsentManager } from './engine/consent'
 import { scrubPayload } from './engine/transformer'
+import { scrubUrl } from './engine/url'
 import { metrics } from './engine/metrics'
 import { AuditLogger } from './engine/audit'
 import { BufferManager } from './engine/buffer'
@@ -368,7 +369,7 @@ async function buildForward(ctx: VendorContext): Promise<BuildOutcome> {
     const result = await adapter.buildRequest(ctx)
     if (!result) return { ok: false, reason: 'adapter_returned_null' }
     if ('skip' in result) return { ok: false, reason: `adapter_skip:${result.reason}` }
-    return { ok: true, forward: result }
+    return { ok: true, forward: withScrubbedUrl(result, ctx) }
   }
 
   // No adapter → generic JSON passthrough. Only useful for testing; a real
@@ -384,17 +385,35 @@ async function buildForward(ctx: VendorContext): Promise<BuildOutcome> {
   const scrub = scrubPayload(ctx.jsonBody, ctx.rule, { detectors: ctx.serverConfig.detectors })
   return {
     ok: true,
-    forward: {
-      url: ctx.originalUrl || ctx.rule.upstreamUrl,
-      method: ctx.method,
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': ctx.headers['user-agent'] || 'Sluice Proxy',
+    forward: withScrubbedUrl(
+      {
+        url: ctx.originalUrl || ctx.rule.upstreamUrl,
+        method: ctx.method,
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': ctx.headers['user-agent'] || 'Sluice Proxy',
+        },
+        body: JSON.stringify(scrub.payload),
+        report: scrub.report,
       },
-      body: JSON.stringify(scrub.payload),
-      report: scrub.report,
-    },
+      ctx,
+    ),
   }
+}
+
+/**
+ * Scrub the URL a forward is about to be sent to, and fold what that removed
+ * into the same report the body scrub produced.
+ *
+ * The passthrough forwards to the URL the browser originally targeted, so its
+ * query string reaches the vendor verbatim unless it is scrubbed here. Adapters
+ * build their own URLs and go through this too: putting it on every forward
+ * leaves no branch where it can be forgotten.
+ */
+function withScrubbedUrl(forward: VendorForward, ctx: VendorContext): VendorForward {
+  const scrub = scrubUrl(forward.url, ctx.rule, { detectors: ctx.serverConfig.detectors })
+  if (scrub.report.length === 0) return forward
+  return { ...forward, url: scrub.url, report: [...forward.report, ...scrub.report] }
 }
 
 function requireAdmin(c: Context, config: ServerConfig): boolean {
