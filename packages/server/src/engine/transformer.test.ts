@@ -7,9 +7,9 @@ function rule(transformations: DestinationRule['transformations']): DestinationR
 }
 
 describe('scrubPayload', () => {
-  it('returns the payload unchanged when no transformations are defined', () => {
+  it('returns the payload untouched when there is nothing to do at all', () => {
     const payload = { event: 'page_view', user: { name: 'Alice' } }
-    const result = scrubPayload(payload, rule([]))
+    const result = scrubPayload(payload, rule([]), { detectors: [] })
     expect(result.payload).toEqual(payload)
     expect(result.payload).toBe(payload)
     expect(result.report).toEqual([])
@@ -151,5 +151,46 @@ describe('scrubPayload report', () => {
     const payload = { email: 'alice@example.com' }
     const result = scrubPayload(payload, rule([{ path: 'email', action: 'strip' }]))
     expect(JSON.stringify(result.report)).not.toContain('alice@example.com')
+  })
+})
+
+describe('scrubPayload value scan', () => {
+  it('scrubs personal data no rule declared', () => {
+    const payload = { event: 'signup', extra: { note: 'reach me at alice@example.com' } }
+    const result = scrubPayload(payload, rule([]))
+    expect(result.payload.extra.note).toBe('reach me at [REDACTED]')
+    expect(result.report).toEqual([
+      { path: 'extra.note', action: 'redact', matched: 1, detector: 'email' },
+    ])
+  })
+
+  it('runs the declared pass first, so an already-hashed field is not re-detected', () => {
+    const payload = { email: 'alice@example.com' }
+    const result = scrubPayload(payload, rule([{ path: 'email', action: 'hash' }]))
+    expect(result.report).toEqual([{ path: 'email', action: 'hash', matched: 1 }])
+    expect(result.payload.email).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('reports declared and detected entries side by side', () => {
+    const payload = { email: 'alice@example.com', ua_extra: '203.0.113.9' }
+    const result = scrubPayload(payload, rule([{ path: 'email', action: 'strip' }]))
+    expect(result.report).toEqual([
+      { path: 'email', action: 'strip', matched: 1 },
+      { path: 'ua_extra', action: 'strip', matched: 1, detector: 'ipv4' },
+    ])
+  })
+
+  it('does not mutate the original payload when only the scan fires', () => {
+    const payload = { anything: 'alice@example.com' }
+    const result = scrubPayload(payload, rule([]))
+    expect(payload.anything).toBe('alice@example.com')
+    expect(result.payload.anything).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('leaves the payload alone when the scan is switched off', () => {
+    const payload = { anything: 'alice@example.com' }
+    const result = scrubPayload(payload, rule([]), { detectors: [] })
+    expect(result.payload.anything).toBe('alice@example.com')
+    expect(result.report).toEqual([])
   })
 })

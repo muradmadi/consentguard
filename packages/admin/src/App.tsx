@@ -13,8 +13,18 @@ function decisionBadge(decision: AuditRecord['decision']): string {
   return 'badge-success'
 }
 
+/**
+ * Where an entry came from: a declared rule path, or the value scan that found
+ * personal data nobody had written a rule for.
+ */
+function originLabel(t: AuditRecord['transformations'][number]): string {
+  return t.detector ? `detected ${t.detector.replace('_', ' ')}` : 'declared rule'
+}
+
 function describeTransformations(log: AuditRecord): string {
-  return log.transformations.map((t) => `${t.action} ${t.path} (×${t.matched})`).join(', ')
+  return log.transformations
+    .map((t) => `${t.action} ${t.path} (×${t.matched}, ${originLabel(t)})`)
+    .join(', ')
 }
 
 function App() {
@@ -489,7 +499,8 @@ function App() {
                 <label>Personal Data Removed</label>
                 {selectedLog.transformations.length === 0 ? (
                   <div style={{ fontSize: '13px', color: 'var(--accents-4)' }}>
-                    Nothing matched — this payload carried none of the declared fields.
+                    Nothing matched — this payload carried none of the declared fields and no
+                    detectable personal data.
                   </div>
                 ) : (
                   <ul style={{ listStyle: 'none', padding: 0 }}>
@@ -505,8 +516,16 @@ function App() {
                           gap: '12px',
                         }}
                       >
-                        <code>{t.path}</code>
-                        <span style={{ color: 'var(--accents-4)' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <code>{t.path}</code>
+                          <span
+                            className="badge"
+                            style={{ opacity: 0.7, fontSize: '11px', whiteSpace: 'nowrap' }}
+                          >
+                            {originLabel(t)}
+                          </span>
+                        </span>
+                        <span style={{ color: 'var(--accents-4)', whiteSpace: 'nowrap' }}>
                           {t.action} × {t.matched}
                         </span>
                       </li>

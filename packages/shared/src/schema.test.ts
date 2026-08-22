@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   AuditRecordSchema,
+  PiiDetectorSchema,
   ConsentStateSchema,
   DestinationRuleSchema,
   IngestRequestSchema,
@@ -133,6 +134,16 @@ describe('TransformationRecordSchema', () => {
   })
 })
 
+describe('PiiDetectorSchema', () => {
+  it.each(['email', 'phone', 'ipv4', 'ipv6', 'credit_card', 'us_ssn'])('accepts %s', (id) => {
+    expect(PiiDetectorSchema.parse(id)).toBe(id)
+  })
+
+  it('rejects an unknown detector', () => {
+    expect(PiiDetectorSchema.safeParse('passport').success).toBe(false)
+  })
+})
+
 describe('AuditRecordSchema', () => {
   const minimal = {
     timestamp: '2026-08-22T10:00:00.000Z',
@@ -162,6 +173,22 @@ describe('AuditRecordSchema', () => {
       transformations: ['strip:email', 'hash:phone'],
     })
     expect(result.success).toBe(false)
+  })
+
+  it('carries the detector that found the data when the scan produced the entry', () => {
+    const parsed = AuditRecordSchema.parse({
+      ...minimal,
+      transformations: [{ path: 'ep.note', action: 'redact', matched: 2, detector: 'email' }],
+    })
+    expect(parsed.transformations[0].detector).toBe('email')
+  })
+
+  it('leaves detector unset for an entry a declared rule path produced', () => {
+    const parsed = AuditRecordSchema.parse({
+      ...minimal,
+      transformations: [{ path: 'user.email', action: 'hash', matched: 1 }],
+    })
+    expect(parsed.transformations[0].detector).toBeUndefined()
   })
 
   it('parses a record carrying real transformation evidence', () => {

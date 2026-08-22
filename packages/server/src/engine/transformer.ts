@@ -1,7 +1,14 @@
-import { DestinationRule, TransformationAction, TransformationRecord } from '@sluice/shared'
+import {
+  DestinationRule,
+  PiiDetector,
+  TransformationAction,
+  TransformationRecord,
+} from '@sluice/shared'
 import { applyStrip } from './transformations/strip'
 import { applyHash } from './transformations/hash'
 import { applyRedact } from './transformations/redact'
+import { DEFAULT_DETECTORS } from './detectors/patterns'
+import { scanPayload } from './detectors/scan'
 
 export interface ScrubResult {
   payload: any
@@ -14,11 +21,29 @@ export interface ScrubResult {
   report: TransformationRecord[]
 }
 
+export interface ScrubOptions {
+  /**
+   * Value-based detectors to run after the declared rules. Defaults to the
+   * standard set rather than to none: a caller that forgets to pass config
+   * should scrub more than asked, never less.
+   */
+  detectors?: PiiDetector[]
+}
+
 /**
- * Scrub a payload based on destination rules.
+ * Scrub a payload in two passes: the destination's declared paths first, then a
+ * value scan over whatever is left. The declared pass is precise and cheap and
+ * runs first so that a field it already hashed cannot be re-detected.
  */
-export function scrubPayload(payload: any, rule: DestinationRule): ScrubResult {
-  if (!rule.transformations || rule.transformations.length === 0) {
+export function scrubPayload(
+  payload: any,
+  rule: DestinationRule,
+  options: ScrubOptions = {},
+): ScrubResult {
+  const detectors = options.detectors ?? DEFAULT_DETECTORS
+  const declared = rule.transformations ?? []
+
+  if (declared.length === 0 && detectors.length === 0) {
     return { payload, report: [] }
   }
 
@@ -26,7 +51,7 @@ export function scrubPayload(payload: any, rule: DestinationRule): ScrubResult {
   const scrubbed = JSON.parse(JSON.stringify(payload))
   const report: TransformationRecord[] = []
 
-  for (const transform of rule.transformations) {
+  for (const transform of declared) {
     const matched = applyTransformation(
       scrubbed,
       transform.path,
@@ -37,6 +62,8 @@ export function scrubPayload(payload: any, rule: DestinationRule): ScrubResult {
       report.push({ path: transform.path, action: transform.action, matched })
     }
   }
+
+  report.push(...scanPayload(scrubbed, detectors))
 
   return { payload: scrubbed, report }
 }

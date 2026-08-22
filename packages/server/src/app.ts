@@ -381,7 +381,7 @@ async function buildForward(ctx: VendorContext): Promise<BuildOutcome> {
     return { ok: false, reason: 'unscrubbable_payload' }
   }
 
-  const scrub = scrubPayload(ctx.jsonBody, ctx.rule)
+  const scrub = scrubPayload(ctx.jsonBody, ctx.rule, { detectors: ctx.serverConfig.detectors })
   return {
     ok: true,
     forward: {

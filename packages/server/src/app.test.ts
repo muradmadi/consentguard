@@ -311,6 +311,53 @@ describe('Sluice server', () => {
       expect((await latestAudit(app)).decision).toBe('failed')
     })
 
+    it('removes personal data from a field no rule declared', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await send(app, {
+        event: 'purchase',
+        custom_field_7: 'alice@example.com',
+        client_ip: '203.0.113.9',
+      })
+      expect(res.status).toBe(204)
+
+      const body = JSON.parse((upstream.mock.calls[0][1] as RequestInit).body as string)
+      expect(body.custom_field_7).toMatch(/^[0-9a-f]{64}$/)
+      expect(body.client_ip).toBeUndefined()
+      expect(body.event).toBe('purchase')
+
+      const entry = await latestAudit(app)
+      expect(entry.transformations).toEqual([
+        { path: 'custom_field_7', action: 'hash', matched: 1, detector: 'email' },
+        { path: 'client_ip', action: 'strip', matched: 1, detector: 'ipv4' },
+      ])
+    })
+
+    it('keeps the audit free of the value the scan removed', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await send(app, { referrer: 'https://shop.test/?email=alice@example.com' })
+
+      const entry = await latestAudit(app)
+      expect(JSON.stringify(entry)).not.toContain('alice@example.com')
+      expect(entry.transformations).toEqual([
+        { path: 'referrer', action: 'redact', matched: 1, detector: 'email' },
+      ])
+    })
+
+    it('forwards the data untouched when the scan is switched off', async () => {
+      const app = createApp(storage, { ...DEV_ENV, SLUICE_DETECTORS: 'off' })
+      await seed(app)
+
+      await send(app, { custom_field_7: 'alice@example.com' })
+
+      const body = JSON.parse((upstream.mock.calls[0][1] as RequestInit).body as string)
+      expect(body.custom_field_7).toBe('alice@example.com')
+      expect((await latestAudit(app)).transformations).toEqual([])
+    })
+
     it('refuses to forward a body it cannot parse and therefore cannot scrub', async () => {
       const app = createApp(storage, DEV_ENV)
       await seed(app)

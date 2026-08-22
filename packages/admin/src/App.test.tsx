@@ -29,6 +29,14 @@ const logs = [
     timestamp: '2026-08-22T10:00:01.000Z',
     transformations: [],
   },
+  {
+    userId: 'u_detected00001',
+    destination: 'ga4',
+    decision: 'forwarded',
+    reason: 'consent granted',
+    timestamp: '2026-08-22T10:00:02.000Z',
+    transformations: [{ path: 'ep.note', action: 'redact', matched: 2, detector: 'email' }],
+  },
 ]
 
 function stubApi() {
@@ -84,6 +92,14 @@ describe('App', () => {
     // scrubbed nothing and must not be labelled as though it had.
     await waitFor(() => expect(screen.getAllByText('1 scrubbed').length).toBeGreaterThan(0))
     expect(screen.queryByText('0 scrubbed')).toBeNull()
+  })
+
+  it('says which entries the value scan found, rather than crediting them to a rule', async () => {
+    render(<App />)
+    await waitFor(() =>
+      expect(screen.getAllByTitle('redact ep.note (×2, detected email)').length).toBeGreaterThan(0),
+    )
+    expect(screen.getAllByTitle('hash user_id (×1, declared rule)').length).toBeGreaterThan(0)
   })
 
   it('survives an API failure without crashing', async () => {

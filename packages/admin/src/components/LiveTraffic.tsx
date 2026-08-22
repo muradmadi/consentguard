@@ -59,8 +59,9 @@ export function LiveTraffic({ logs }: { logs: AuditRecord[] }) {
                 <div style={{ fontSize: '11px', color: 'var(--accents-5)', marginTop: '2px' }}>
                   {log.decision.toUpperCase()}
                   {log.transformations.length > 0 &&
-                    ` • ${log.transformations.reduce((n, t) => n + t.matched, 0)} scrubbed`}{' '}
-                  • {log.userId.slice(0, 8)}...
+                    ` • ${log.transformations.reduce((n, t) => n + t.matched, 0)} scrubbed`}
+                  {log.transformations.some((t) => t.detector) && ' • detected'} •{' '}
+                  {log.userId.slice(0, 8)}...
                 </div>
               </div>
             </div>

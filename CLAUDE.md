@@ -16,7 +16,8 @@ that sentence more true, more provable, or easier to operate, it is out of scope
 
 **In scope**
 
-- Detecting personal data in outbound analytics payloads.
+- Detecting personal data in outbound analytics payloads — both at paths a rule
+  declares and by the shape of the value, wherever it turns up.
 - Transforming it — `strip`, `hash` (salted SHA-256), `redact` (regex) — per destination rule.
 - Forwarding the cleaned payload to the vendor's server-side API.
 - An audit record of every transformation applied to every request.
@@ -69,6 +70,8 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
 6. **Scrub + build** — a registered `VendorAdapter` translates the intercepted beacon
    into the vendor's server-side schema and calls `scrubPayload` itself. With no
    adapter, a generic JSON passthrough scrubs and forwards to `rule.upstreamUrl`.
+   `scrubPayload` applies the rule's declared paths and then the value scan; both
+   produce audit entries, and a scan entry carries the `detector` that found it.
 7. **Forward upstream**, then audit + metrics. Success → `204`, upstream failure → `502`.
    The audit is written after the upstream call resolves, so `decision` states what
    happened rather than what was intended.
@@ -78,6 +81,11 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
 - **Transformation engine** — `engine/transformer.ts` walks a dotted path with `*` as an
   array wildcard, dispatching to `engine/transformations/{strip,hash,redact}.ts`. Each
   primitive returns whether it fired; `scrubPayload` returns `{ payload, report }`.
+- **Value scan** — `engine/detectors/patterns.ts` defines the detectors (email, phone,
+  ipv4, ipv6, credit_card, and opt-in us_ssn) and `detectors/scan.ts` walks every string
+  in the payload applying them. `scrubPayload` runs it after the declared pass, so a field
+  a rule already hashed is not re-detected. Configured by `SLUICE_DETECTORS`; `off`
+  disables it.
 - **Forward builder** — `buildForward` in `app.ts` turns a request into the scrubbed
   upstream call. Both the live path and buffer replay go through it, so the scrub-before-egress
   rule lives in one place.

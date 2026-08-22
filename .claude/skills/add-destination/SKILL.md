@@ -26,6 +26,12 @@ Then list every field in the server-side shape that can carry personal data: ema
 phone, name, address, IP, user agent, raw user ids, order or customer identifiers.
 Those become the transformations.
 
+The value scan (`engine/detectors/`) already catches emails, phones, IPs, and card
+numbers by shape wherever they appear, so a declared path is for what the scan cannot
+see: names, addresses, raw user ids, and anything vendor-specific. Do not skip declaring
+a known path because the scan would probably catch it — the declared pass runs first and
+is the cheap, exact layer.
+
 ## 2. Write the rule
 
 Create `packages/server/src/destinations/<vendor>.ts`:
@@ -80,7 +86,10 @@ Create `packages/server/src/destinations/adapters/<vendor>.ts` implementing
 - Read the original request from `ctx` — `originalUrl`, `query`, `rawBody`, `jsonBody`,
   `headers` (already lowercased).
 - Build the vendor's server-side payload.
-- Call `scrubPayload(payload, ctx.rule)` itself. It returns `{ payload, report }` — forward
+- Call `scrubPayload(payload, ctx.rule, { detectors: ctx.serverConfig.detectors })` itself.
+  Passing the detectors is what lets an operator turn the value scan off; omitting the
+  argument falls back to the default set, which scrubs more than configured, never less.
+  It returns `{ payload, report }` — forward
   the scrubbed payload and pass `report` straight through as the forward's `report` field.
   That report is what the audit record is built from, so never synthesise it from the rule:
   an entry must mean the transformation actually fired against this payload.

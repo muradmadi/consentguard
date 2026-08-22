@@ -69,19 +69,28 @@ like `mixpanel.ts`'s `properties.$email` — a path that cannot exist because th
 destination has no adapter. The audit deliberately does not store unmatched entries, so
 this needs its own surface.
 
-### 2. Detect personal data that was not declared
+### 2. Detect personal data that was not declared — **done**
 
-Today a field is only scrubbed if someone wrote its exact dotted path into a rule. That
-catches known leaks and nothing else, which is the weaker half of the problem — the
-expensive incidents are the fields nobody knew were being sent.
+A field used to be scrubbed only if someone wrote its exact dotted path into a rule,
+which caught known leaks and nothing else. The expensive incidents are the fields nobody
+knew were being sent.
 
-Add a scanning pass that walks the whole payload and matches _values_, not paths:
-email, E.164 and common national phone formats, IPv4/IPv6, credit-card numbers (Luhn),
-and national identifiers behind an opt-in flag. Each detector gets its own action and
-its own audit entry. Declared rules stay as the precise, cheap layer on top.
+`scrubPayload` now runs a second pass over the whole payload matching _values_:
+`email`, `phone` (E.164 plus separated national formats), `ipv4`, `ipv6`, `credit_card`
+(issuer prefix plus Luhn), and `us_ssn` behind an opt-in. Each detector has its own
+action — email and phone are hashed so identity resolution survives, addresses and card
+numbers are removed — and produces its own audit entry carrying the detector that fired
+and the concrete path it fired at. Declared rules run first and stay the precise, cheap
+layer on top.
 
-This is the feature that makes the product a firewall rather than a config file. It is
-the highest-value work in this document.
+A match covering the whole value gets the detector's action; a match inside a longer
+string is redacted in place, because hashing a page URL over one query param would
+destroy the event while removing nothing else. `SLUICE_DETECTORS` selects the set;
+`off` disables the scan.
+
+Every pattern is deliberately conservative about separators: a bare run of digits is an
+order id far more often than a phone number or a card. False positives corrupt analytics
+data, which is how a firewall gets switched off.
 
 ### 3. Close the interception holes
 

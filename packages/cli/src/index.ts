@@ -156,7 +156,10 @@ program
             `${time} | ${pc.bold(log.destination.padEnd(15))} | ${decision.padEnd(20)} | ${pc.dim(log.userId)}`,
           )
           for (const t of log.transformations) {
-            console.log(pc.dim(`  └─ ${t.action} ${t.path} (${t.matched})`))
+            // An entry with a detector was found by the value scan; without one
+            // it came from a path the destination's rule declared.
+            const origin = t.detector ? pc.yellow(`detected ${t.detector}`) : 'declared'
+            console.log(pc.dim(`  └─ ${t.action} ${t.path} ×${t.matched} `) + pc.dim(`(${origin})`))
           }
           lastTimestamp = log.timestamp
         }

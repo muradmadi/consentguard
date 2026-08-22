@@ -1,3 +1,32 @@
+import { PiiDetectorSchema, type PiiDetector } from '@sluice/shared'
+import { DEFAULT_DETECTORS } from './engine/detectors/patterns'
+
+/**
+ * Which value-based detectors run against every payload.
+ *
+ * Unset means the default set. `off` disables the scan entirely and leaves only
+ * the destinations' declared paths — a deliberate downgrade, not a tuning knob.
+ * Unknown names are dropped with a warning rather than silently ignored.
+ */
+const parseDetectors = (raw: unknown): PiiDetector[] => {
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_DETECTORS
+
+  const names = String(raw)
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+
+  if (names.length === 1 && (names[0] === 'off' || names[0] === 'none')) return []
+
+  const detectors: PiiDetector[] = []
+  for (const name of names) {
+    const parsed = PiiDetectorSchema.safeParse(name)
+    if (parsed.success) detectors.push(parsed.data)
+    else console.warn(`[Sluice] Ignoring unknown PII detector: ${name}`)
+  }
+  return detectors
+}
+
 /**
  * Proxy Server Configuration
  * Runtime-agnostic. Runtimes inject their own env vars.
@@ -38,6 +67,7 @@ export const getServerConfig = (env: any = {}) => {
     defaultConsent: env.SLUICE_DEFAULT_CONSENT || env.defaultConsent || 'deny',
     // Empty list = permissive (dev-friendly). Non-empty = strict allowlist.
     allowedOrigins,
+    detectors: parseDetectors(env.SLUICE_DETECTORS ?? env.detectors),
     ga4: {
       measurementId: env.GA4_MEASUREMENT_ID || env.ga4MeasurementId || '',
       apiSecret: env.GA4_API_SECRET || env.ga4ApiSecret || '',
