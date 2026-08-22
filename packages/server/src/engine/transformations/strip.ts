@@ -3,6 +3,6 @@
  */
 export const applyStrip = (obj: any, head: string) => {
   if (obj && typeof obj === 'object' && head in obj) {
-    delete obj[head];
+    delete obj[head]
   }
-};
+}

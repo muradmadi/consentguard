@@ -1,4 +1,4 @@
-import { DestinationRule } from '@sluice/shared';
+import { DestinationRule } from '@sluice/shared'
 
 export const tiktok: DestinationRule = {
   id: 'tiktok',
@@ -22,6 +22,6 @@ export const tiktok: DestinationRule = {
       path: 'properties.content_id',
       action: 'redact',
       pattern: 'ID-[0-9]+', // Example of redact with pattern
-    }
+    },
   ],
-};
+}

@@ -11,14 +11,15 @@
   --accents-6: #999999;
   --accents-7: #eaeaea;
   --accents-8: #fafafa;
-  
+
   --success: #0070f3;
   --error: #ee0000;
   --warning: #f5a623;
-  
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  --font-sans:
+    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
-  
+
   --radius: 8px;
   --gap: 24px;
 }
@@ -37,7 +38,10 @@ body {
   overflow-x: hidden;
 }
 
-button, input, select, textarea {
+button,
+input,
+select,
+textarea {
   font-family: inherit;
 }
 
@@ -79,7 +83,8 @@ header {
   transition: color 0.2s;
 }
 
-.nav-link:hover, .nav-link.active {
+.nav-link:hover,
+.nav-link.active {
   color: var(--fg);
 }
 
@@ -92,10 +97,25 @@ main {
 }
 
 /* Typography */
-h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.05em; }
-h2 { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
-h3 { font-size: 16px; font-weight: 600; }
-p { font-size: 14px; color: var(--accents-5); line-height: 1.6; }
+h1 {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+h2 {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+h3 {
+  font-size: 16px;
+  font-weight: 600;
+}
+p {
+  font-size: 14px;
+  color: var(--accents-5);
+  line-height: 1.6;
+}
 
 /* Components */
 .card {
@@ -134,8 +154,16 @@ p { font-size: 14px; color: var(--accents-5); line-height: 1.6; }
   text-transform: uppercase;
 }
 
-.badge-success { background: rgba(0, 112, 243, 0.1); color: var(--success); border: 1px solid var(--success); }
-.badge-error { background: rgba(238, 0, 0, 0.1); color: var(--error); border: 1px solid var(--error); }
+.badge-success {
+  background: rgba(0, 112, 243, 0.1);
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+.badge-error {
+  background: rgba(238, 0, 0, 0.1);
+  color: var(--error);
+  border: 1px solid var(--error);
+}
 
 .table-container {
   width: 100%;
@@ -164,7 +192,9 @@ td {
   border-bottom: 1px solid var(--accents-1);
 }
 
-tr:last-child td { border-bottom: none; }
+tr:last-child td {
+  border-bottom: none;
+}
 
 .btn {
   background: var(--fg);
@@ -178,7 +208,9 @@ tr:last-child td { border-bottom: none; }
   transition: opacity 0.2s;
 }
 
-.btn:hover { opacity: 0.9; }
+.btn:hover {
+  opacity: 0.9;
+}
 
 .btn-secondary {
   background: var(--bg);
@@ -251,7 +283,8 @@ tr:last-child td { border-bottom: none; }
   font-weight: 600;
 }
 
-input, select {
+input,
+select {
   background: var(--bg);
   border: 1px solid var(--accents-2);
   color: var(--fg);
@@ -261,7 +294,8 @@ input, select {
   font-size: 14px;
 }
 
-input:focus, select:focus {
+input:focus,
+select:focus {
   outline: none;
   border-color: var(--accents-5);
 }
@@ -295,4 +329,6 @@ input:focus, select:focus {
   background: var(--accents-1);
 }
 
-.text-error { color: var(--error) !important; }
+.text-error {
+  color: var(--error) !important;
+}

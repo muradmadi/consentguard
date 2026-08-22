@@ -1,23 +1,23 @@
-import type { DestinationRule } from '@sluice/shared';
-import type { ServerConfig } from '../../config';
+import type { DestinationRule } from '@sluice/shared'
+import type { ServerConfig } from '../../config'
 
 /**
  * Context passed to a vendor adapter for one intercepted request.
  */
 export interface VendorContext {
-  method: string;
+  method: string
   /** URL the SDK originally targeted, before the client interceptor rewrote it. */
-  originalUrl: string;
+  originalUrl: string
   /** Query string on the request that reached the proxy. */
-  query: URLSearchParams;
+  query: URLSearchParams
   /** Lowercased request headers. */
-  headers: Record<string, string>;
+  headers: Record<string, string>
   /** Parsed JSON body if Content-Type was application/json. Null otherwise. */
-  jsonBody: any | null;
+  jsonBody: any | null
   /** Raw body as text (form-encoded, JSON, or empty). */
-  rawBody: string;
-  rule: DestinationRule;
-  serverConfig: ServerConfig;
+  rawBody: string
+  rule: DestinationRule
+  serverConfig: ServerConfig
 }
 
 /**
@@ -25,16 +25,16 @@ export interface VendorContext {
  * from an adapter means "drop this event" — the proxy will 204 and log it.
  */
 export interface VendorForward {
-  url: string;
-  method: string;
-  headers: Record<string, string>;
-  body: string;
+  url: string
+  method: string
+  headers: Record<string, string>
+  body: string
   /** True if the adapter already applied its transformations. Skip the generic pass. */
-  scrubbed?: boolean;
+  scrubbed?: boolean
 }
 
-export type AdapterResult = VendorForward | null | { skip: true; reason: string };
+export type AdapterResult = VendorForward | null | { skip: true; reason: string }
 
 export interface VendorAdapter {
-  buildRequest(ctx: VendorContext): Promise<AdapterResult> | AdapterResult;
+  buildRequest(ctx: VendorContext): Promise<AdapterResult> | AdapterResult
 }

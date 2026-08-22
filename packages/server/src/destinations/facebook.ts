@@ -1,4 +1,4 @@
-import { DestinationRule } from '@sluice/shared';
+import { DestinationRule } from '@sluice/shared'
 
 export const facebook: DestinationRule = {
   id: 'facebook_pixel',
@@ -12,4 +12,4 @@ export const facebook: DestinationRule = {
     { path: 'data.*.user_data.client_user_agent', action: 'strip' },
     { path: 'data.*.custom_data.order_id', action: 'redact', pattern: 'ORDER-[0-9]+' },
   ],
-};
+}

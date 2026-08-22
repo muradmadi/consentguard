@@ -1,4 +1,4 @@
-import { DestinationRule } from '@sluice/shared';
+import { DestinationRule } from '@sluice/shared'
 
 /**
  * GA4 uses a real vendor adapter (see ./adapters/ga4.ts) that translates
@@ -19,4 +19,4 @@ export const ga4: DestinationRule = {
     { path: 'events.*.params.ip', action: 'strip' },
     { path: 'events.*.params.uip', action: 'strip' },
   ],
-};
+}

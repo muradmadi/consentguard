@@ -14,10 +14,7 @@ export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
   const addTransformation = () => {
     setEditedRule({
       ...editedRule,
-      transformations: [
-        ...editedRule.transformations,
-        { path: '', action: 'strip' }
-      ]
+      transformations: [...editedRule.transformations, { path: '', action: 'strip' }],
     })
   }
 
@@ -38,14 +35,16 @@ export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
       <div className="modal-content">
         <div className="modal-header">
           <h2>Edit Rule: {rule.id}</h2>
-          <button className="btn-icon" onClick={onClose}><X size={20} /></button>
+          <button className="btn-icon" onClick={onClose}>
+            <X size={20} />
+          </button>
         </div>
 
         <div className="modal-body">
           <div className="form-group">
             <label>Category</label>
-            <select 
-              value={editedRule.category} 
+            <select
+              value={editedRule.category}
               onChange={(e) => setEditedRule({ ...editedRule, category: e.target.value })}
             >
               <option value="analytics">Analytics</option>
@@ -56,7 +55,14 @@ export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
           </div>
 
           <div style={{ marginTop: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '12px',
+              }}
+            >
               <h3>Transformations</h3>
               <button className="btn btn-secondary btn-sm" onClick={addTransformation}>
                 <Plus size={14} style={{ marginRight: '4px' }} /> Add
@@ -66,13 +72,13 @@ export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
             <div className="transformation-list">
               {editedRule.transformations.map((t, i) => (
                 <div key={i} className="transformation-item">
-                  <input 
-                    type="text" 
-                    placeholder="JSON Path (e.g. user.email)" 
+                  <input
+                    type="text"
+                    placeholder="JSON Path (e.g. user.email)"
                     value={t.path}
                     onChange={(e) => updateTransformation(i, 'path', e.target.value)}
                   />
-                  <select 
+                  <select
                     value={t.action}
                     onChange={(e) => updateTransformation(i, 'action', e.target.value)}
                     style={{ width: '100px' }}
@@ -82,9 +88,9 @@ export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
                     <option value="redact">Redact</option>
                   </select>
                   {t.action === 'redact' && (
-                    <input 
-                      type="text" 
-                      placeholder="Pattern (regex)" 
+                    <input
+                      type="text"
+                      placeholder="Pattern (regex)"
                       value={t.pattern || ''}
                       onChange={(e) => updateTransformation(i, 'pattern', e.target.value)}
                     />
@@ -99,7 +105,9 @@ export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
         </div>
 
         <div className="modal-footer">
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
           <button className="btn btn-primary" onClick={() => onSave(editedRule)}>
             <Save size={16} style={{ marginRight: '8px' }} /> Save Changes
           </button>

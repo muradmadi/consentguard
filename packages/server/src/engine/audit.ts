@@ -1,23 +1,23 @@
-import { StorageProvider } from './storage';
+import { StorageProvider } from './storage'
 
 export interface AuditRecord {
-  timestamp: string;
-  userId: string;
-  destination: string;
-  decision: 'forwarded' | 'blocked' | 'buffered' | 'scrubbed';
-  reason: string;
-  purposesRequired?: string;
-  purposesGranted?: string[];
-  transformationsApplied?: string[];
+  timestamp: string
+  userId: string
+  destination: string
+  decision: 'forwarded' | 'blocked' | 'buffered' | 'scrubbed'
+  reason: string
+  purposesRequired?: string
+  purposesGranted?: string[]
+  transformationsApplied?: string[]
 }
 
 export class AuditLogger {
-  private storage: StorageProvider;
-  private readonly KEY = 'sluice_audit_trail';
-  private readonly MAX_ENTRIES = 1000;
+  private storage: StorageProvider
+  private readonly KEY = 'sluice_audit_trail'
+  private readonly MAX_ENTRIES = 1000
 
   constructor(storage: StorageProvider) {
-    this.storage = storage;
+    this.storage = storage
   }
 
   /**
@@ -27,13 +27,13 @@ export class AuditLogger {
     const fullRecord: AuditRecord = {
       ...record,
       timestamp: new Date().toISOString(),
-    };
+    }
 
     try {
-      await this.storage.lpush(this.KEY, JSON.stringify(fullRecord));
-      await this.storage.ltrim(this.KEY, 0, this.MAX_ENTRIES - 1);
+      await this.storage.lpush(this.KEY, JSON.stringify(fullRecord))
+      await this.storage.ltrim(this.KEY, 0, this.MAX_ENTRIES - 1)
     } catch (error) {
-      console.error('[Sluice] Audit logging failed:', error);
+      console.error('[Sluice] Audit logging failed:', error)
     }
   }
 
@@ -41,14 +41,14 @@ export class AuditLogger {
    * Retrieve the latest audit logs.
    */
   async getLogs(limit = 100): Promise<AuditRecord[]> {
-    const data = await this.storage.lrange(this.KEY, 0, limit - 1);
-    return data.map((entry) => JSON.parse(entry));
+    const data = await this.storage.lrange(this.KEY, 0, limit - 1)
+    return data.map((entry) => JSON.parse(entry))
   }
 
   /**
    * Clear audit logs.
    */
   async clear(): Promise<void> {
-    await this.storage.del(this.KEY);
+    await this.storage.del(this.KEY)
   }
 }

@@ -1,4 +1,4 @@
-import { DestinationRule } from '@sluice/shared';
+import { DestinationRule } from '@sluice/shared'
 
 export const hotjar: DestinationRule = {
   id: 'hotjar',
@@ -17,6 +17,6 @@ export const hotjar: DestinationRule = {
     {
       path: 'payload.data.ip',
       action: 'strip',
-    }
+    },
   ],
-};
+}

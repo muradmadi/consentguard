@@ -10,4 +10,4 @@ export const INTERCEPTION_PATTERNS: Record<string, string> = {
   'facebook.net': 'facebook_pixel',
   'tiktok.com': 'tiktok',
   'hotjar.com': 'hotjar',
-};
+}

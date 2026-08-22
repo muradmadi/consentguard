@@ -23,7 +23,10 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     ? new HybridStorageProvider(storage, { ttlMs: config.cacheTtl })
     : storage
 
-  const consentManager = new ConsentManager(effectiveStorage, config.defaultConsent as 'allow' | 'deny')
+  const consentManager = new ConsentManager(
+    effectiveStorage,
+    config.defaultConsent as 'allow' | 'deny',
+  )
   const auditLogger = new AuditLogger(effectiveStorage)
   const bufferManager = new BufferManager(effectiveStorage)
   const ruleManager = new RuleManager(effectiveStorage)
@@ -33,32 +36,39 @@ export function createApp(storage: StorageProvider, env: any = {}) {
 
   // Static assets (dashboard + client bundle) resolved relative to the CWD.
   const normalizedCwd = (typeof process !== 'undefined' ? process.cwd() : '').replace(/\\/g, '/')
-  const isServerSubdir = normalizedCwd.endsWith('/packages/server') || normalizedCwd.endsWith('/server')
+  const isServerSubdir =
+    normalizedCwd.endsWith('/packages/server') || normalizedCwd.endsWith('/server')
   const adminDistPath = isServerSubdir ? '../admin/dist' : './packages/admin/dist'
   const clientBundlePath = isServerSubdir
     ? '../client/dist/sluice.iife.js'
     : './packages/client/dist/sluice.iife.js'
 
-  app.use('/dashboard/*', serveStatic({
-    root: adminDistPath,
-    rewriteRequestPath: (path) => path.replace(/^\/dashboard/, ''),
-  }))
+  app.use(
+    '/dashboard/*',
+    serveStatic({
+      root: adminDistPath,
+      rewriteRequestPath: (path) => path.replace(/^\/dashboard/, ''),
+    }),
+  )
   app.get('/dashboard', (c) => c.redirect('/dashboard/index.html'))
   app.use('/sluice-client.js', serveStatic({ path: clientBundlePath }))
 
   // CORS: browser calls to /ingest and /consent/self must send credentials
   // (the cuid cookie). We reflect the request's origin only when it's in the
   // allowlist so cookies flow correctly, and 403 elsewhere at the app level.
-  app.use('*', cors({
-    origin: (origin) => {
-      if (!origin) return '*'
-      if (config.allowedOrigins.length === 0) return origin
-      return config.allowedOrigins.includes(origin) ? origin : ''
-    },
-    credentials: true,
-    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'X-Consent-UserId', 'X-Original-Url'],
-  }))
+  app.use(
+    '*',
+    cors({
+      origin: (origin) => {
+        if (!origin) return '*'
+        if (config.allowedOrigins.length === 0) return origin
+        return config.allowedOrigins.includes(origin) ? origin : ''
+      },
+      credentials: true,
+      allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowHeaders: ['Content-Type', 'Authorization', 'X-Consent-UserId', 'X-Original-Url'],
+    }),
+  )
 
   app.get('/health', (c) => c.json({ status: 'ok', storage: storage.constructor.name }))
 
@@ -74,7 +84,13 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400)
 
     await consentManager.setConsent(userId, parsed.data)
-    const replayed = await replayBuffered(userId, parsed.data, { consentManager, auditLogger, ruleManager, config, bufferManager })
+    const replayed = await replayBuffered(userId, parsed.data, {
+      consentManager,
+      auditLogger,
+      ruleManager,
+      config,
+      bufferManager,
+    })
     return c.json({ status: 'saved', replayed })
   })
 
@@ -123,7 +139,13 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400)
 
     await consentManager.setConsent(userId, parsed.data)
-    const replayed = await replayBuffered(userId, parsed.data, { consentManager, auditLogger, ruleManager, config, bufferManager })
+    const replayed = await replayBuffered(userId, parsed.data, {
+      consentManager,
+      auditLogger,
+      ruleManager,
+      config,
+      bufferManager,
+    })
     return c.json({ status: 'saved', userId, replayed })
   })
 
@@ -184,10 +206,11 @@ export function createApp(storage: StorageProvider, env: any = {}) {
 
     const destination = c.req.param('destination')
 
-    const userId = c.req.header('X-Consent-UserId')
-      || getCookie(c, 'cuid')
-      || c.req.query('cuid')
-      || c.req.query('sluice_user_id')
+    const userId =
+      c.req.header('X-Consent-UserId') ||
+      getCookie(c, 'cuid') ||
+      c.req.query('cuid') ||
+      c.req.query('sluice_user_id')
 
     if (!userId) {
       metrics.recordRequest(destination, 'blocked')
@@ -227,7 +250,8 @@ export function createApp(storage: StorageProvider, env: any = {}) {
           originalUrl: c.req.header('X-Original-Url') || rule.upstreamUrl,
         })
         await auditLogger.log({
-          userId, destination,
+          userId,
+          destination,
           decision: 'buffered',
           reason: 'new_user_pending_consent',
           purposesRequired: rule.category,
@@ -237,7 +261,8 @@ export function createApp(storage: StorageProvider, env: any = {}) {
 
       metrics.recordRequest(destination, 'blocked')
       await auditLogger.log({
-        userId, destination,
+        userId,
+        destination,
         decision: 'blocked',
         reason: 'consent_missing',
         purposesRequired: rule.category,
@@ -258,14 +283,20 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     }
 
     const adapter = getAdapter(destination)
-    let forward: { url: string; method: string; headers: Record<string, string>; body: string } | null
+    let forward: {
+      url: string
+      method: string
+      headers: Record<string, string>
+      body: string
+    } | null
 
     if (adapter) {
       const result = await adapter.buildRequest(ctx)
       if (result && 'skip' in result) {
         // Adapter deliberately declined — treat as a drop.
         await auditLogger.log({
-          userId, destination,
+          userId,
+          destination,
           decision: 'blocked',
           reason: `adapter_skip:${result.reason}`,
           purposesRequired: rule.category,
@@ -280,7 +311,8 @@ export function createApp(storage: StorageProvider, env: any = {}) {
       // real destinations need real adapters.
       if (!rule.upstreamUrl) {
         await auditLogger.log({
-          userId, destination,
+          userId,
+          destination,
           decision: 'blocked',
           reason: 'no_adapter_and_no_upstream_url',
           purposesRequired: rule.category,
@@ -303,7 +335,8 @@ export function createApp(storage: StorageProvider, env: any = {}) {
     if (!forward) {
       // Adapter returned null: drop cleanly.
       await auditLogger.log({
-        userId, destination,
+        userId,
+        destination,
         decision: 'blocked',
         reason: 'adapter_returned_null',
         purposesRequired: rule.category,
@@ -314,7 +347,8 @@ export function createApp(storage: StorageProvider, env: any = {}) {
 
     const transformationsApplied = rule.transformations?.map((t) => `${t.action}:${t.path}`) || []
     await auditLogger.log({
-      userId, destination,
+      userId,
+      destination,
       decision: transformationsApplied.length > 0 ? 'scrubbed' : 'forwarded',
       reason: 'consent_granted',
       purposesRequired: rule.category,
@@ -396,7 +430,8 @@ async function replayBuffered(
       const rule = await ruleManager.getRule(req.destination)
       if (!consentManager.hasConsent(consent, rule.category)) {
         await auditLogger.log({
-          userId, destination: req.destination,
+          userId,
+          destination: req.destination,
           decision: 'blocked',
           reason: 'replayed_but_still_no_consent',
           purposesRequired: rule.category,
@@ -406,10 +441,14 @@ async function replayBuffered(
       const targetUrl = req.originalUrl || rule.upstreamUrl
       if (!targetUrl) continue
       try {
-        const payload = typeof req.payload === 'string' ? req.payload : JSON.stringify(scrubPayload(req.payload, rule))
+        const payload =
+          typeof req.payload === 'string'
+            ? req.payload
+            : JSON.stringify(scrubPayload(req.payload, rule))
         await fetch(targetUrl, { method: req.method, headers: req.headers, body: payload })
         await auditLogger.log({
-          userId, destination: req.destination,
+          userId,
+          destination: req.destination,
           decision: 'forwarded',
           reason: 'replayed_from_buffer',
           purposesRequired: rule.category,

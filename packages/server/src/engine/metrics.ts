@@ -3,8 +3,8 @@
  * Tracks blocks, forwards, and errors for the proxy.
  */
 export class MetricsCollector {
-  private static instance: MetricsCollector;
-  
+  private static instance: MetricsCollector
+
   private metrics = {
     requestsTotal: {} as Record<string, number>,
     decisions: {
@@ -13,30 +13,30 @@ export class MetricsCollector {
     },
     errors: 0,
     startTime: Date.now(),
-  };
+  }
 
   private constructor() {}
 
   public static getInstance(): MetricsCollector {
     if (!MetricsCollector.instance) {
-      MetricsCollector.instance = new MetricsCollector();
+      MetricsCollector.instance = new MetricsCollector()
     }
-    return MetricsCollector.instance;
+    return MetricsCollector.instance
   }
 
   public recordRequest(destination: string, decision: 'blocked' | 'forwarded') {
-    const key = `${destination}:${decision}`;
-    this.metrics.requestsTotal[key] = (this.metrics.requestsTotal[key] || 0) + 1;
-    
+    const key = `${destination}:${decision}`
+    this.metrics.requestsTotal[key] = (this.metrics.requestsTotal[key] || 0) + 1
+
     if (decision === 'blocked') {
-      this.metrics.decisions.blocked++;
+      this.metrics.decisions.blocked++
     } else {
-      this.metrics.decisions.forwarded++;
+      this.metrics.decisions.forwarded++
     }
   }
 
   public recordError() {
-    this.metrics.errors++;
+    this.metrics.errors++
   }
 
   public reset() {
@@ -48,7 +48,7 @@ export class MetricsCollector {
       },
       errors: 0,
       startTime: Date.now(),
-    };
+    }
   }
 
   public getMetrics() {
@@ -56,29 +56,29 @@ export class MetricsCollector {
       ...this.metrics,
       uptimeSeconds: Math.floor((Date.now() - this.metrics.startTime) / 1000),
       timestamp: new Date().toISOString(),
-    };
+    }
   }
 
   /**
    * Returns metrics in a pseudo-Prometheus format
    */
   public toPrometheus() {
-    let output = '# HELP sluice_requests_total Total requests processed by Sluice\n';
-    output += '# TYPE sluice_requests_total counter\n';
-    
+    let output = '# HELP sluice_requests_total Total requests processed by Sluice\n'
+    output += '# TYPE sluice_requests_total counter\n'
+
     for (const [key, value] of Object.entries(this.metrics.requestsTotal)) {
-      const [dest, decision] = key.split(':');
-      output += `sluice_requests_total{destination="${dest}", decision="${decision}"} ${value}\n`;
+      const [dest, decision] = key.split(':')
+      output += `sluice_requests_total{destination="${dest}", decision="${decision}"} ${value}\n`
     }
 
-    output += `\n# HELP sluice_errors_total Total upstream errors\n`;
-    output += `sluice_errors_total ${this.metrics.errors}\n`;
+    output += `\n# HELP sluice_errors_total Total upstream errors\n`
+    output += `sluice_errors_total ${this.metrics.errors}\n`
 
-    output += `\n# HELP sluice_uptime_seconds Uptime in seconds\n`;
-    output += `sluice_uptime_seconds ${Math.floor((Date.now() - this.metrics.startTime) / 1000)}\n`;
+    output += `\n# HELP sluice_uptime_seconds Uptime in seconds\n`
+    output += `sluice_uptime_seconds ${Math.floor((Date.now() - this.metrics.startTime) / 1000)}\n`
 
-    return output;
+    return output
   }
 }
 
-export const metrics = MetricsCollector.getInstance();
+export const metrics = MetricsCollector.getInstance()

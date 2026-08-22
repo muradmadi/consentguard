@@ -3,19 +3,26 @@
  * Runtime-agnostic. Runtimes inject their own env vars.
  */
 export const getServerConfig = (env: any = {}) => {
-  const nodeEnv = env.NODE_ENV || env.env || (typeof process !== 'undefined' ? process.env.NODE_ENV : '') || 'development';
-  const isDev = nodeEnv === 'development' || nodeEnv === 'test';
+  const nodeEnv =
+    env.NODE_ENV ||
+    env.env ||
+    (typeof process !== 'undefined' ? process.env.NODE_ENV : '') ||
+    'development'
+  const isDev = nodeEnv === 'development' || nodeEnv === 'test'
 
-  const adminSecret = env.ADMIN_SECRET || env.adminSecret || (isDev ? 'dev-admin-secret' : undefined);
+  const adminSecret =
+    env.ADMIN_SECRET || env.adminSecret || (isDev ? 'dev-admin-secret' : undefined)
   if (!adminSecret) {
-    throw new Error('FATAL: ADMIN_SECRET is missing. Sluice cannot start in a non-dev environment without it.');
+    throw new Error(
+      'FATAL: ADMIN_SECRET is missing. Sluice cannot start in a non-dev environment without it.',
+    )
   }
 
-  const allowedOriginsRaw = env.SLUICE_ALLOWED_ORIGINS || env.allowedOrigins || '';
+  const allowedOriginsRaw = env.SLUICE_ALLOWED_ORIGINS || env.allowedOrigins || ''
   const allowedOrigins = String(allowedOriginsRaw)
     .split(',')
     .map((s: string) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean)
 
   return {
     port: parseInt(env.PORT || env.port || '3000'),
@@ -35,10 +42,10 @@ export const getServerConfig = (env: any = {}) => {
       measurementId: env.GA4_MEASUREMENT_ID || env.ga4MeasurementId || '',
       apiSecret: env.GA4_API_SECRET || env.ga4ApiSecret || '',
     },
-  };
-};
+  }
+}
 
-export type ServerConfig = ReturnType<typeof getServerConfig>;
+export type ServerConfig = ReturnType<typeof getServerConfig>
 
 // For backward compatibility and Node.js default usage
-export const serverConfig = getServerConfig(typeof process !== 'undefined' ? process.env : {});
+export const serverConfig = getServerConfig(typeof process !== 'undefined' ? process.env : {})

@@ -5,14 +5,14 @@ export const applyRedact = (obj: any, head: string, pattern?: string) => {
   if (obj && typeof obj === 'object' && typeof obj[head] === 'string') {
     if (pattern) {
       try {
-        const regex = new RegExp(pattern, 'gi');
-        obj[head] = obj[head].replace(regex, '[REDACTED]');
+        const regex = new RegExp(pattern, 'gi')
+        obj[head] = obj[head].replace(regex, '[REDACTED]')
       } catch (e) {
-        console.warn(`[Sluice] Invalid regex pattern for redaction: ${pattern}`, e);
-        obj[head] = '[REDACTED]';
+        console.warn(`[Sluice] Invalid regex pattern for redaction: ${pattern}`, e)
+        obj[head] = '[REDACTED]'
       }
     } else {
-      obj[head] = '[REDACTED]';
+      obj[head] = '[REDACTED]'
     }
   }
-};
+}

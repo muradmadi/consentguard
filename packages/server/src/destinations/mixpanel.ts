@@ -1,4 +1,4 @@
-import { DestinationRule } from '@sluice/shared';
+import { DestinationRule } from '@sluice/shared'
 
 export const mixpanel: DestinationRule = {
   id: 'mixpanel',
@@ -10,4 +10,4 @@ export const mixpanel: DestinationRule = {
     { path: 'properties.distinct_id', action: 'hash' },
     { path: 'properties.ip', action: 'strip' },
   ],
-};
+}

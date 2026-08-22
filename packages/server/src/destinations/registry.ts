@@ -1,11 +1,11 @@
-import { DestinationRule } from '@sluice/shared';
-import { ga4 } from './ga4';
-import { mixpanel } from './mixpanel';
-import { amplitude } from './amplitude';
-import { facebook } from './facebook';
+import { DestinationRule } from '@sluice/shared'
+import { ga4 } from './ga4'
+import { mixpanel } from './mixpanel'
+import { amplitude } from './amplitude'
+import { facebook } from './facebook'
 
-import { tiktok } from './tiktok';
-import { hotjar } from './hotjar';
+import { tiktok } from './tiktok'
+import { hotjar } from './hotjar'
 
 const REGISTRY: Record<string, DestinationRule> = {
   ga4,
@@ -14,12 +14,12 @@ const REGISTRY: Record<string, DestinationRule> = {
   facebook_pixel: facebook,
   tiktok,
   hotjar,
-};
+}
 
-export const REGISTRY_KEYS = Object.keys(REGISTRY);
+export const REGISTRY_KEYS = Object.keys(REGISTRY)
 
 export function getDestinationRule(id: string): DestinationRule | null {
-  return REGISTRY[id] || null;
+  return REGISTRY[id] || null
 }
 
 /**
@@ -35,5 +35,5 @@ export function getDefaultRule(id: string): DestinationRule {
       { path: 'user_id', action: 'hash' },
       { path: 'ip', action: 'strip' },
     ],
-  };
+  }
 }

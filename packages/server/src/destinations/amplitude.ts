@@ -1,4 +1,4 @@
-import { DestinationRule } from '@sluice/shared';
+import { DestinationRule } from '@sluice/shared'
 
 export const amplitude: DestinationRule = {
   id: 'amplitude',
@@ -12,4 +12,4 @@ export const amplitude: DestinationRule = {
     { path: 'events.*.user_properties.email', action: 'strip' },
     { path: 'events.*.ip', action: 'strip' },
   ],
-};
+}

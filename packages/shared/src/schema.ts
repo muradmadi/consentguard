@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod'
 
 /**
  * Consent State Schema
@@ -9,15 +9,15 @@ export const ConsentStateSchema = z.object({
   purposes: z.record(z.boolean()),
   timestamp: z.number().int(),
   metadata: z.record(z.any()).optional(),
-});
+})
 
-export type ConsentState = z.infer<typeof ConsentStateSchema>;
+export type ConsentState = z.infer<typeof ConsentStateSchema>
 
 /**
  * Transformation Action Types
  */
-export const TransformationActionSchema = z.enum(['strip', 'hash', 'redact']);
-export type TransformationAction = z.infer<typeof TransformationActionSchema>;
+export const TransformationActionSchema = z.enum(['strip', 'hash', 'redact'])
+export type TransformationAction = z.infer<typeof TransformationActionSchema>
 
 /**
  * Destination Rule Schema
@@ -28,14 +28,18 @@ export const DestinationRuleSchema = z.object({
   category: z.string(), // e.g., 'analytics', 'marketing'
   endpoints: z.array(z.string()), // Domain patterns to match
   upstreamUrl: z.string().optional(), // Default URL to forward to
-  transformations: z.array(z.object({
-    path: z.string(), // JSON path (e.g., 'events.*.params.email')
-    action: TransformationActionSchema,
-    pattern: z.string().optional(), // Optional regex pattern for redaction
-  })).default([]),
-});
+  transformations: z
+    .array(
+      z.object({
+        path: z.string(), // JSON path (e.g., 'events.*.params.email')
+        action: TransformationActionSchema,
+        pattern: z.string().optional(), // Optional regex pattern for redaction
+      }),
+    )
+    .default([]),
+})
 
-export type DestinationRule = z.infer<typeof DestinationRuleSchema>;
+export type DestinationRule = z.infer<typeof DestinationRuleSchema>
 
 /**
  * Ingest Request Schema
@@ -43,6 +47,6 @@ export type DestinationRule = z.infer<typeof DestinationRuleSchema>;
 export const IngestRequestSchema = z.object({
   destination: z.string(),
   payload: z.any(),
-});
+})
 
-export type IngestRequest = z.infer<typeof IngestRequestSchema>;
+export type IngestRequest = z.infer<typeof IngestRequestSchema>
