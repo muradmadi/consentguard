@@ -13,7 +13,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@hono/node-server": "^1.11.1",
+    "@hono/node-server": "^2.1.1",
     "@sluice/shared": "*",
     "hono": "^4.13.3",
     "ioredis": "^6.0.0",
