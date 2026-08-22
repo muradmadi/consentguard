@@ -6,9 +6,9 @@ import { z } from 'zod'
  */
 export const ConsentStateSchema = z.object({
   userId: z.string(),
-  purposes: z.record(z.boolean()),
+  purposes: z.record(z.string(), z.boolean()),
   timestamp: z.number().int(),
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 })
 
 export type ConsentState = z.infer<typeof ConsentStateSchema>
