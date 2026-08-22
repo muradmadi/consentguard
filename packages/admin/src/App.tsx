@@ -38,6 +38,7 @@ function App() {
       setRules(rules.map(r => r.id === updatedRule.id ? updatedRule : r))
       setSelectedRule(null)
     } catch (e) {
+      console.error('[Sluice] Failed to save rule', e)
       alert('Failed to save rule')
     } finally {
       setIsLoading(false)

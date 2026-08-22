@@ -1,13 +1,8 @@
-import { useState, useEffect } from 'react'
 import { Activity, Shield, ShieldOff } from 'lucide-react'
 
 export function LiveTraffic({ logs }: { logs: any[] }) {
-  const [stream, setStream] = useState<any[]>([])
-
-  useEffect(() => {
-    // Take the last 10 logs and reverse them so newest is on top
-    setStream(logs.slice(0, 15))
-  }, [logs])
+  // Newest first; the API already returns the log in reverse-chronological order.
+  const stream = logs.slice(0, 15)
 
   return (
     <div className="card" style={{ padding: '0', overflow: 'hidden' }}>

@@ -1,4 +1,3 @@
-import { ConsentState } from '@sluice/shared';
 
 export interface CMPAdapter {
   /**

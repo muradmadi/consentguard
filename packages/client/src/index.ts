@@ -233,16 +233,15 @@ export function init(config?: Partial<ClientConfig>) {
       this.setRequestHeader('X-Consent-UserId', userId);
       if (this._sluiceOriginalUrl) this.setRequestHeader('X-Original-Url', this._sluiceOriginalUrl);
 
-      const self = this;
       const shim = () => {
-        if (self.readyState !== 4) return;
-        if (self.status === 403) stopRerouting = true;
+        if (this.readyState !== 4) return;
+        if (this.status === 403) stopRerouting = true;
         // Present an opaque success to the vendor SDK regardless of actual outcome.
-        if (self.status === 200 || self.status === 202 || self.status === 204) {
-          Object.defineProperty(self, 'status', { get: () => 204, configurable: true });
-          Object.defineProperty(self, 'statusText', { get: () => 'No Content', configurable: true });
-          Object.defineProperty(self, 'response', { get: () => '', configurable: true });
-          Object.defineProperty(self, 'responseText', { get: () => '', configurable: true });
+        if (this.status === 200 || this.status === 202 || this.status === 204) {
+          Object.defineProperty(this, 'status', { get: () => 204, configurable: true });
+          Object.defineProperty(this, 'statusText', { get: () => 'No Content', configurable: true });
+          Object.defineProperty(this, 'response', { get: () => '', configurable: true });
+          Object.defineProperty(this, 'responseText', { get: () => '', configurable: true });
         }
       };
       this.addEventListener('readystatechange', shim);
@@ -254,12 +253,11 @@ export function init(config?: Partial<ClientConfig>) {
       return originalSend.apply(this, [body]);
     } catch (err) {
       console.error('[Sluice] XHR send error:', err);
-      const self = this;
       setTimeout(() => {
-        Object.defineProperty(self, 'readyState', { get: () => 4, configurable: true });
-        Object.defineProperty(self, 'status', { get: () => 204, configurable: true });
-        if (self.onload) (self.onload as any)();
-        if (self.onreadystatechange) (self.onreadystatechange as any)();
+        Object.defineProperty(this, 'readyState', { get: () => 4, configurable: true });
+        Object.defineProperty(this, 'status', { get: () => 204, configurable: true });
+        if (this.onload) (this.onload as any)();
+        if (this.onreadystatechange) (this.onreadystatechange as any)();
       }, 0);
     }
   };

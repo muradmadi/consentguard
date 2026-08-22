@@ -207,7 +207,7 @@ program
       } else {
         console.log(`${pc.red('○')} Proxy:     ${pc.bold('Error')} ${pc.dim(`(HTTP ${res.status})`)}`);
       }
-    } catch (e) {
+    } catch {
       console.log(`${pc.red('○')} Proxy:     ${pc.bold('Offline')} ${pc.dim('(Connection Refused)')}`);
     }
 
@@ -226,7 +226,7 @@ program
       } else {
         console.log(`${pc.yellow('○')} Stats:     ${pc.bold('Unauthorized')} ${pc.dim('(Check ADMIN_SECRET)')}`);
       }
-    } catch (e) {}
+    } catch { /* best-effort probe; the offline case is already reported above */ }
 
     // 3. Check Rules
     try {
@@ -242,7 +242,7 @@ program
           console.log(`  └─ Overrides: ${pc.yellow(overrides + ' active')}`);
         }
       }
-    } catch (e) {}
+    } catch { /* best-effort probe; the offline case is already reported above */ }
 
     console.log(pc.dim('\nUse "sluice logs" to see real-time traffic.'));
   });
