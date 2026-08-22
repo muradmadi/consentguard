@@ -6,9 +6,14 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { spawn } from 'child_process'
 
+declare const __CLI_VERSION__: string
+
 const program = new Command()
 
-program.name('sluice').description('Sluice CLI - Manage your privacy proxy').version('0.1.0')
+program
+  .name('sluice')
+  .description('Sluice CLI - Manage your privacy proxy')
+  .version(__CLI_VERSION__)
 
 program
   .command('init')
