@@ -119,4 +119,50 @@ describe('applyHash', () => {
     expect(applyHash(obj, 'em', hasher, { mode: 'pseudonymize' })).toBeNull()
     expect(obj.em).toBe(42)
   })
+
+  /**
+   * Meta's pixel with Advanced Matching hashes `em` and `ph` in the browser, so
+   * what arrives is already the digest the vendor will match on. Hashing it
+   * again is the silent failure the modes exist to prevent: well-formed,
+   * accepted, and matching nobody.
+   */
+  it('leaves a match key the vendor already hashed alone', () => {
+    const digest = createHash('sha256').update('alice@example.com').digest('hex')
+    const obj = { em: digest }
+
+    // Nothing changed, so there is nothing to report — the audit records what
+    // fired, and this did not.
+    expect(applyHash(obj, 'em', hasher, { mode: 'match_key', normalize: 'email' })).toBeNull()
+    expect(obj.em).toBe(digest)
+  })
+
+  it('is not case-sensitive about a digest the vendor sent in upper case', () => {
+    const digest = createHash('sha256').update('alice@example.com').digest('hex').toUpperCase()
+    const obj = { em: digest }
+    expect(applyHash(obj, 'em', hasher, { mode: 'match_key', normalize: 'email' })).toBeNull()
+    expect(obj.em).toBe(digest)
+  })
+
+  /**
+   * A pseudonym is keyed to this deployment, so an incoming digest is somebody
+   * else's value and has to be re-hashed. Only the unsalted match key can treat
+   * a digest as already done.
+   */
+  it('still pseudonymises a value that happens to look like a digest', () => {
+    const digest = createHash('sha256').update('alice@example.com').digest('hex')
+    const obj = { user_id: digest }
+    expect(applyHash(obj, 'user_id', hasher, { mode: 'pseudonymize' })).toEqual({
+      action: 'hash',
+      mode: 'pseudonymize',
+    })
+    expect(obj.user_id).not.toBe(digest)
+  })
+
+  it('hashes a 64-character value that is not hexadecimal', () => {
+    const obj = { em: `${'z'.repeat(54)}@example.com` }
+    expect(applyHash(obj, 'em', hasher, { mode: 'match_key', normalize: 'email' })).toEqual({
+      action: 'hash',
+      mode: 'match_key',
+    })
+  })
 })

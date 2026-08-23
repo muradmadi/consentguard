@@ -195,23 +195,107 @@ rather than resolving it, so a destination rule declaring a domain that resolves
 private address still reaches it. That needs a resolver on the hot path, and reaching it
 needs the ability to write destination rules in the first place.
 
-### 6. Make the registry honest
+### 6. Make the registry honest — **done**
 
-`adapters/index.ts` registers exactly one adapter (GA4). Five other destinations are
-listed in the registry and cannot forward to their real vendor — `facebook.ts` has a
-literal `<PIXEL_ID>` in its `upstreamUrl`.
+`adapters/index.ts` registered exactly one adapter. Five other destinations were listed
+in the registry and could not forward to their real vendor — `facebook.ts` carried a
+literal `<PIXEL_ID>` in its `upstreamUrl`. A registry that lists destinations it cannot
+serve is the same class of dishonesty as the audit bug in item 1.
 
-Either write the adapter or remove the entry. A registry that lists destinations it
-cannot serve is the same class of dishonesty as the audit bug in item 1.
+Reading the code first turned out to matter, because "which of these actually work" was
+not what anyone had assumed, and it was wrong in both directions:
 
-Priority order if adapters get written: Meta CAPI, then Mixpanel. Item 8 laid the
-groundwork for the first: `facebook.ts` declares `em` and `ph` as vendor match keys, so a
-CAPI adapter has the hashing contract it needs and only has to build the request.
+- **facebook_pixel and amplitude already worked.** A Meta pixel is a bodyless `GET`
+  whose whole payload is the query string, so item 4's pixel branch plus item 3's
+  `scrubUrl` is a complete scrub of it. Amplitude POSTs its HTTP V2 envelope to the
+  endpoint the browser targeted, and the rule's paths address that shape. Calling either
+  one unsupported would have been the same dishonesty pointing the other way.
+- **mixpanel was leaking.** Its beacon base64-encodes the batch into a `data` parameter.
+  Neither pass can see inside that, so the payload was forwarded verbatim and audited as
+  `forwarded` with no transformations — accurate, and a leak.
+- **facebook_pixel's match keys had never fired.** `data.*.user_data.em` addresses the
+  CAPI body; the browser pixel sends `ud[em]` in a query string. Item 8 landed the
+  `match_key` mode against paths nothing could reach, so the value scan caught the
+  address instead and pseudonymised it — correct policy, and a digest Meta cannot match.
+  The event arrived and attributed to nobody, which is the failure the modes exist to
+  prevent.
+- **amplitude's rule stripped `api_key`**, which is Amplitude's own authentication for
+  the call being made and a public client key that ships in the page regardless. Every
+  forward that rule produced was rejected by the vendor.
 
-Note that until then those five destinations forward nowhere: the passthrough now has to
-satisfy the egress allowlist, and `facebook.ts`'s `<PIXEL_ID>` upstream still cannot
-work. The registry lists them; the firewall refuses them. That is the honest failure
-mode, not a substitute for fixing it.
+So the support level is now derived from two facts rather than asserted from one.
+`transport` on the destination rule states how the vendor's beacon carries its payload —
+`pixel` (the query string), `json` (a body at the endpoint the browser targeted), or
+`opaque` (encoded, unreadable to both passes). `destinations/support.ts` combines that
+with whether an adapter is registered:
+
+| Destination      | transport | support       |
+| ---------------- | --------- | ------------- |
+| `ga4`            | `pixel`   | `adapter`     |
+| `facebook_pixel` | `pixel`   | `adapter`     |
+| `mixpanel`       | `opaque`  | `adapter`     |
+| `amplitude`      | `json`    | `passthrough` |
+| `tiktok`         | `json`    | `passthrough` |
+| `hotjar`         | `opaque`  | `unsupported` |
+
+`transport` is required rather than defaulted, so an override written against the older
+schema fails to parse and falls back to the registry — the documented behaviour for a
+malformed override, and it fails closed to the reviewed value where a default would have
+quietly answered the question. `getDefaultRule` declares `opaque`, so a destination
+nobody declared is refused by support as unconditionally as its `unknown` category is
+refused by consent.
+
+**`unsupported` is a refusal, not a label.** `/ingest` blocks it before anything is
+built and audits `destination_unsupported`. That is what closes the Mixpanel class of
+leak mechanically: a payload that cannot be scrubbed is not one that gets forwarded.
+
+Two adapters were written. **Meta CAPI** translates the pixel query string into the
+Conversions API envelope — which is the shape `facebook.ts`'s paths already addressed, so
+its `em` and `ph` match keys fire for the first time. It populates
+`client_ip_address` and `client_user_agent` from what actually reached the proxy
+specifically so the rule visibly removes them: "no raw IP reached Meta" belongs in the
+audit as evidence rather than as an omission. **Mixpanel** decodes the `data` parameter,
+scrubs the batch, and posts it to the server-side ingestion endpoint; the project token
+rides in `properties.token`, so it needs no configuration, which is why an unconfigured
+deployment gets real protection there rather than a skip.
+
+The remaining three stay in the registry. Deleting an entry also drops the client's
+interception pattern, so a deleted vendor's beacons reach it unscrubbed — strictly worse
+than an honest `unsupported` that is intercepted and refused. Hotjar is that case: what
+it sends is a recording envelope, its rule's `payload.data.form_fields.*.value` path
+could never have matched it, and it now blocks rather than pretending.
+
+Three things were found alongside it:
+
+- **Destination matching was `url.includes(domain)` against the whole URL.** So
+  `https://app.example.com/?ref=amplitude.com` was rerouted into the firewall and
+  `notamplitude.com` matched `amplitude.com`. Losing real first-party application
+  traffic to an analytics proxy is the expensive half of that. `matchDestination` moved
+  into `client/src/patterns.ts` and now parses the URL and reads the host under the same
+  subdomain rule `engine/egress.ts` applies server-side, with an optional path prefix
+  that has to match whole segments. The drift guard imports that function rather than
+  reimplementing it, and asserts the lookalikes.
+- **Two hosts were never intercepted at all.** `api-js.mixpanel.com` is where the JS SDK
+  posts and `api.mixpanel.com` was the only pattern; `hotjar.io` carries the recordings
+  and only `hotjar.com` was declared.
+- **An already-hashed match key was hashed again.** Meta's pixel with Advanced Matching
+  hashes `em` and `ph` in the browser, so `applyHash` was producing a digest of a digest:
+  well-formed, accepted, matching nobody. It now leaves a value that is already a SHA-256
+  digest alone, and writes no audit entry, because nothing fired.
+
+**Item 5's interception holes, closed and restated.** The mutation observer now handles
+`<img>` as well as `<script>`, so a pixel the parser appends below the Sluice tag is
+rerouted rather than walking past; `srcset` joined `src` on both the property setter and
+`setAttribute`, because a candidate list is a list of URLs the browser will fetch one of.
+There is deliberately no document-ready sweep behind it: by then every parser-issued
+request has completed, so a sweep cannot prevent a leak and would only send the vendor
+the same event twice. What is left — an `<img>` or a `window.fetch`-capturing tracker
+_above_ the Sluice tag — is not closable in the client at all. It is an install
+requirement, and `docs/install.md` now states it as one rather than carrying it
+indefinitely as a known gap.
+
+Still open: `/api/rule-health` still only reports destinations the registry knows, and
+Amplitude, TikTok and Hotjar still have no adapter. Two of the three do not need one.
 
 ### 7. Make the evidence outlive the request — **done**
 

@@ -230,6 +230,7 @@ describe('Sluice server', () => {
           // Declared endpoints are the egress allowlist: a forward may only
           // address a host this rule names, or its own upstreamUrl.
           endpoints: ['api.vendor.test'],
+          transport: 'json',
           upstreamUrl: SINK,
           transformations: [
             { path: 'email', action: 'strip' },
@@ -480,6 +481,7 @@ describe('Sluice server', () => {
           id: 'testpixel',
           category: 'marketing',
           endpoints: ['pixel.vendor.test'],
+          transport: 'pixel',
           transformations: [],
         }),
       })
@@ -712,6 +714,7 @@ describe('Sluice server', () => {
       id: 'testpixel',
       category: 'marketing',
       endpoints: ['pixel.vendor.test'],
+      transport: 'pixel',
       transformations: [],
     }
     let upstream: ReturnType<typeof vi.fn>
@@ -811,6 +814,116 @@ describe('Sluice server', () => {
       expect(line).not.toContain('original=')
     })
   })
+
+  /**
+   * A destination this build cannot serve is refused before anything is built.
+   *
+   * The case that matters is an encoded payload — Mixpanel's base64 `data`, a
+   * Hotjar recording envelope — where neither scrub pass can read the contents.
+   * Forwarding one produced a truthful audit record saying nothing was removed,
+   * which is the same defect as an audit built from a rule's declarations: the
+   * evidence was accurate and the payload still carried whatever was in it.
+   */
+  describe('/ingest destinations this build cannot serve', () => {
+    const OPAQUE_RULE = {
+      id: 'testopaque',
+      category: 'analytics',
+      endpoints: ['sink.example.com'],
+      transport: 'opaque',
+      upstreamUrl: 'https://sink.example.com/collect',
+      transformations: [],
+    }
+    let upstream: ReturnType<typeof vi.fn>
+    let realFetch: typeof globalThis.fetch
+
+    async function seed(app: ReturnType<typeof createApp>, rule: unknown = OPAQUE_RULE) {
+      await app.request(`/api/rules/${(rule as any).id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify(rule),
+      })
+      await app.request('/consent/opaque-user', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
+        body: JSON.stringify({ purposes: { analytics: true }, timestamp: Date.now() }),
+      })
+    }
+
+    async function latestAudit(app: ReturnType<typeof createApp>) {
+      const res = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
+      return ((await res.json()) as any).records[0]
+    }
+
+    beforeEach(() => {
+      realFetch = globalThis.fetch
+      upstream = vi.fn(async () => new Response(null, { status: 200 }))
+      globalThis.fetch = upstream as unknown as typeof fetch
+    })
+
+    afterEach(() => {
+      globalThis.fetch = realFetch
+    })
+
+    it('does not forward an opaque payload it has no adapter for', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const res = await app.request('/ingest/testopaque', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'opaque-user' },
+        body: JSON.stringify({ data: 'W3siZXZlbnQiOiJ4In1d' }),
+      })
+
+      expect(res.status).toBe(204)
+      expect(upstream).not.toHaveBeenCalled()
+    })
+
+    it('records why, because a refusal is evidence too', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      await app.request('/ingest/testopaque', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'opaque-user' },
+        body: JSON.stringify({ data: 'W3siZXZlbnQiOiJ4In1d' }),
+      })
+
+      const entry = await latestAudit(app)
+      expect(entry).toMatchObject({
+        destination: 'testopaque',
+        decision: 'blocked',
+        reason: 'destination_unsupported',
+      })
+    })
+
+    it('refuses a bodyless pixel for the same destination, not just a body', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app)
+
+      const original = 'https://sink.example.com/collect?data=W3siZXZlbnQiOiJ4In1d'
+      await app.request(
+        `/ingest/testopaque?cuid=opaque-user&original=${encodeURIComponent(original)}`,
+      )
+
+      expect(upstream).not.toHaveBeenCalled()
+      expect((await latestAudit(app)).reason).toBe('destination_unsupported')
+    })
+
+    it('still forwards a destination whose transport both passes can read', async () => {
+      const app = createApp(storage, DEV_ENV)
+      await seed(app, { ...OPAQUE_RULE, id: 'testreadable', transport: 'json' })
+
+      const res = await app.request('/ingest/testreadable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'opaque-user' },
+        body: JSON.stringify({ event: 'page_view' }),
+      })
+
+      expect(res.status).toBe(204)
+      expect(upstream).toHaveBeenCalledTimes(1)
+      expect((await latestAudit(app)).decision).toBe('forwarded')
+    })
+  })
   /**
    * The record is half the claim: nothing leaves carrying personal data, *and*
    * there is a per-request record proving it. These cover the half that has to
@@ -828,14 +941,18 @@ describe('Sluice server', () => {
       return createApp(storage, { ...DEV_ENV, ...env }, { auditSink })
     }
 
+    // A registry destination with no adapter, because /api/rule-health can only
+    // report on ids the registry knows — it joins the audit against
+    // RuleManager.getAllRules(), and StorageProvider cannot enumerate keys.
     async function seed(instance: ReturnType<typeof createApp>) {
-      await instance.request('/api/rules/mixpanel', {
+      await instance.request('/api/rules/amplitude', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-admin' },
         body: JSON.stringify({
-          id: 'mixpanel',
+          id: 'amplitude',
           category: 'analytics',
           endpoints: ['sink.example.com'],
+          transport: 'json',
           upstreamUrl: SINK,
           transformations: [
             { path: 'email', action: 'strip' },
@@ -851,7 +968,7 @@ describe('Sluice server', () => {
     }
 
     function send(instance: ReturnType<typeof createApp>, payload: unknown) {
-      return instance.request('/ingest/mixpanel', {
+      return instance.request('/ingest/amplitude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'clean-user' },
         body: JSON.stringify(payload),
@@ -883,7 +1000,7 @@ describe('Sluice server', () => {
       const [file] = (await readdir(dir)).filter((f) => f.endsWith('.ndjson'))
       const lines = (await readFile(join(dir, file), 'utf8')).trim().split('\n')
       expect(lines).toHaveLength(1)
-      expect(JSON.parse(lines[0])).toMatchObject({ destination: 'mixpanel', seq: 0 })
+      expect(JSON.parse(lines[0])).toMatchObject({ destination: 'amplitude', seq: 0 })
     })
 
     it('survives the process that wrote it', async () => {
@@ -903,7 +1020,7 @@ describe('Sluice server', () => {
       await seed(instance)
       await send(instance, { email: 'alice@example.com' })
       await send(instance, { contact: 'bob@example.com' })
-      await instance.request('/ingest/mixpanel', {
+      await instance.request('/ingest/amplitude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'no-consent-user' },
         body: JSON.stringify({}),
@@ -959,7 +1076,7 @@ describe('Sluice server', () => {
       expect(rows[0]).toBe(
         'seq,timestamp,userId,destination,decision,reason,purposesRequired,purposesGranted,transformations,prevHash,hash',
       )
-      expect(rows[1]).toContain('mixpanel')
+      expect(rows[1]).toContain('amplitude')
       expect(rows[1]).not.toContain('alice@example.com')
 
       const ndjson = await get(instance, '/audit?format=ndjson')
@@ -1032,7 +1149,7 @@ describe('Sluice server', () => {
       await send(instance, { email: 'alice@example.com' })
 
       const report = (await (await get(instance, '/api/rule-health')).json()) as any
-      const vendor = report.destinations.find((d: any) => d.destination === 'mixpanel')
+      const vendor = report.destinations.find((d: any) => d.destination === 'amplitude')
 
       expect(vendor.declared).toEqual([
         { path: 'email', action: 'strip', matched: 1, lastFiredAt: expect.any(String) },
@@ -1113,6 +1230,7 @@ describe('rule override validation', () => {
     const res = await put(app, {
       category: 'marketing',
       endpoints: ['api.vendor.test'],
+      transport: 'pixel',
       transformations: [{ path: 'em', action: 'hash', mode: 'match_key' }],
     })
     expect(res.status).toBe(400)
@@ -1128,6 +1246,7 @@ describe('rule override validation', () => {
     const res = await put(app, {
       category: 'marketing',
       endpoints: ['api.vendor.test'],
+      transport: 'pixel',
       transformations: [{ path: 'em', action: 'hash', mode: 'match_key', normalize: 'email' }],
     })
     expect(res.status).toBe(200)
@@ -1159,6 +1278,7 @@ describe('identity promotion', () => {
         id: 'testvendor',
         category: 'analytics',
         endpoints: ['sink.example.com'],
+        transport: 'json',
         upstreamUrl: SINK,
         transformations: [],
       }),
@@ -1214,6 +1334,7 @@ describe('identity promotion', () => {
         id: 'essential',
         category: 'necessary',
         endpoints: ['sink.example.com'],
+        transport: 'json',
         upstreamUrl: SINK,
         transformations: [],
       }),

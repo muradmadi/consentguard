@@ -7,7 +7,7 @@
  * never from the page that is being measured.
  */
 
-import { INTERCEPTION_PATTERNS } from './patterns'
+import { INTERCEPTION_PATTERNS, matchDestination } from './patterns'
 
 export interface ClientConfig {
   /** Absolute proxy URL, e.g. https://proxy.example.com. Overrides proxyPath. */
@@ -166,10 +166,6 @@ export function init(config?: Partial<ClientConfig>) {
   // writable: a page cannot assert its own consent.
   ;(window as any).Sluice = { userId, proxyBase }
 
-  if (resolved.observeMutations) {
-    observeMutations((url) => matchDestination(url, activeDestinations))
-  }
-
   // If proxy returns 403, stop rerouting for the remainder of the session
   // rather than hammering it. Reset on next full page load.
   let stopRerouting = false
@@ -192,6 +188,14 @@ export function init(config?: Partial<ClientConfig>) {
     proxied.searchParams.set('cuid', userId)
     proxied.searchParams.set('original', url)
     return proxied.toString()
+  }
+
+  // Started only now, because it hands the observer `rewriteTrackingUrl`.
+  if (resolved.observeMutations) {
+    observeMutations({
+      getDestination: (url) => matchDestination(url, activeDestinations),
+      rewriteTrackingUrl,
+    })
   }
 
   // --- fetch ---
@@ -314,12 +318,15 @@ export function init(config?: Partial<ClientConfig>) {
   // --- <img> pixels ---
   // The Meta pixel and much of ad-tech send events by assigning an image's src.
   // None of fetch, XHR or sendBeacon sees those, so without this the request
-  // walks straight past the firewall. Both ways a src can be set are covered.
+  // walks straight past the firewall. Both ways a src can be set are covered,
+  // and srcset alongside it: a candidate list is a list of URLs the browser
+  // will fetch one of, which makes it as usable a beacon as src.
   //
-  // Two limits remain. An <img> already present in the initial HTML has its src
-  // set by the parser and never reaches this setter — the same root cause as a
-  // tracker that captures window.fetch before this bundle runs. And srcset is
-  // not covered; nothing uses it as a beacon transport.
+  // One limit remains, and it is not closable here. An <img> written into the
+  // initial HTML above the Sluice tag has its src set by the parser before this
+  // code exists — the same root cause as a tracker that captures window.fetch
+  // first. The mutation observer catches what the parser appends after us; what
+  // it cannot catch is an install requirement, not a bug. See docs/install.md.
   if (typeof HTMLImageElement !== 'undefined') {
     const rewriteSrc = (value: string): string => {
       try {
@@ -332,34 +339,55 @@ export function init(config?: Partial<ClientConfig>) {
       }
     }
 
-    const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
-    if (descriptor?.set) {
-      const originalSrcSetter = descriptor.set
-      Object.defineProperty(HTMLImageElement.prototype, 'src', {
-        ...descriptor,
-        set(value: string) {
-          originalSrcSetter.call(this, rewriteSrc(String(value)))
-        },
-      })
-    }
+    patchImageUrlProperty('src', rewriteSrc)
+    patchImageUrlProperty('srcset', (value) => rewriteSrcset(value, rewriteSrc))
 
     // setAttribute lives on Element.prototype; assigning here shadows it for
     // images only, leaving every other element's attributes alone.
     const originalSetAttribute = HTMLImageElement.prototype.setAttribute
     HTMLImageElement.prototype.setAttribute = function (name: string, value: string) {
-      if (name.toLowerCase() === 'src') {
+      const attribute = name.toLowerCase()
+      if (attribute === 'src') {
         return originalSetAttribute.call(this, name, rewriteSrc(String(value)))
+      }
+      if (attribute === 'srcset') {
+        return originalSetAttribute.call(this, name, rewriteSrcset(String(value), rewriteSrc))
       }
       return originalSetAttribute.call(this, name, value)
     }
   }
 }
 
-function matchDestination(url: string, destinations: Record<string, string>): string | null {
-  for (const [domain, id] of Object.entries(destinations)) {
-    if (url.includes(domain)) return id
-  }
-  return null
+/** Wrap one of HTMLImageElement's URL-bearing properties, leaving its getter alone. */
+function patchImageUrlProperty(name: 'src' | 'srcset', rewrite: (value: string) => string) {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, name)
+  if (!descriptor?.set) return
+  const originalSetter = descriptor.set
+  Object.defineProperty(HTMLImageElement.prototype, name, {
+    ...descriptor,
+    set(value: string) {
+      originalSetter.call(this, rewrite(String(value)))
+    },
+  })
+}
+
+/**
+ * Rewrite each URL in a srcset candidate list, keeping its descriptor.
+ *
+ * A candidate is `url` optionally followed by a width or density descriptor,
+ * and the list is comma-separated. A URL cannot contain an unescaped comma or
+ * whitespace, so splitting on those is the parse the HTML spec describes.
+ */
+function rewriteSrcset(value: string, rewrite: (url: string) => string): string {
+  return value
+    .split(',')
+    .map((candidate) => {
+      const match = candidate.match(/^(\s*)(\S+)(\s*.*)$/)
+      if (!match) return candidate
+      const [, leading, url, descriptor] = match
+      return `${leading}${rewrite(url)}${descriptor}`
+    })
+    .join(',')
 }
 
 function fallbackOrOpaque(
@@ -373,18 +401,55 @@ function fallbackOrOpaque(
   return new Response(null, { status: 204, statusText: 'No Content' })
 }
 
-function observeMutations(getDestination: (url: string) => string | null) {
+interface ObserverHooks {
+  getDestination: (url: string) => string | null
+  rewriteTrackingUrl: (url: string) => string | null
+}
+
+/**
+ * Watch the DOM for trackers the patched primitives never see.
+ *
+ * A `<script>` gets defused. An `<img>` gets its `src` rewritten to the proxy,
+ * which is the only chance to catch a pixel the parser built rather than script
+ * — the `HTMLImageElement.prototype.src` setter is never called for one, so
+ * without this it walks straight past the firewall.
+ *
+ * It is a chance and not a guarantee. The observer is delivered a microtask
+ * after the node is appended, and the browser may already have started the
+ * request; re-assigning `src` aborts an in-flight image load in every engine,
+ * but a request already on the wire has already carried the query string.
+ * There is deliberately no document-ready sweep behind this: by then every one
+ * of those requests has completed, so a sweep could not prevent a leak and
+ * would only send the vendor the same event a second time. A pixel that has to
+ * be caught reliably has to be below the Sluice tag — see docs/install.md.
+ */
+function observeMutations({ getDestination, rewriteTrackingUrl }: ObserverHooks) {
   const observer = new MutationObserver((mutations) => {
     mutations.forEach((m) => {
       m.addedNodes.forEach((node) => {
-        if (node.nodeName !== 'SCRIPT') return
-        const script = node as HTMLScriptElement
-        if (!script.src) return
-        const destination = getDestination(script.src)
-        if (!destination) return
-        script.type = 'text/plain'
-        script.setAttribute('data-sluice-blocked', 'true')
-        script.setAttribute('data-sluice-destination', destination)
+        if (node.nodeName === 'SCRIPT') {
+          const script = node as HTMLScriptElement
+          if (!script.src) return
+          const destination = getDestination(script.src)
+          if (!destination) return
+          script.type = 'text/plain'
+          script.setAttribute('data-sluice-blocked', 'true')
+          script.setAttribute('data-sluice-destination', destination)
+          return
+        }
+
+        if (node.nodeName === 'IMG') {
+          const img = node as HTMLImageElement
+          // Assigning src re-enters the patched setter, which would rewrite an
+          // already-proxied URL a second time. The marker makes this once-only.
+          if (img.getAttribute('data-sluice-rerouted')) return
+          const original = img.getAttribute('src')
+          if (!original) return
+          const proxied = rewriteTrackingUrl(original)
+          if (!proxied) return
+          img.setAttribute('data-sluice-rerouted', 'true')
+          img.src = proxied
+        }
       })
     })
   })

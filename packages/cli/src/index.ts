@@ -191,6 +191,24 @@ program
     poll()
   })
 
+/**
+ * Colour carries the meaning here: a destination the proxy refuses should not
+ * read the same as one it serves. Never derived locally — the level comes from
+ * the proxy, which is the only thing that knows which adapters this build has.
+ */
+function supportLabel(support: string): string {
+  switch (support) {
+    case 'adapter':
+      return pc.green('adapter    ')
+    case 'passthrough':
+      return pc.cyan('passthrough')
+    case 'unsupported':
+      return pc.red('unsupported')
+    default:
+      return pc.dim((support || 'unknown').padEnd(11))
+  }
+}
+
 program
   .command('status')
   .description('Check the health and status of Sluice components')
@@ -232,9 +250,13 @@ program
 
       if (res.ok) {
         const stats: any = await res.json()
+        // `totalRequests` and `blockedRequests` were never fields /api/stats
+        // returns, so both printed 0 whatever the proxy had counted — an
+        // operator surface stating a number it had not obtained.
+        const decisions = stats.decisions || { forwarded: 0, blocked: 0 }
         console.log(`${pc.green('●')} Stats:     ${pc.bold('Accessible')}`)
-        console.log(`  ├─ Requests:  ${pc.cyan(stats.totalRequests || 0)}`)
-        console.log(`  ├─ Blocked:   ${pc.red(stats.blockedRequests || 0)}`)
+        console.log(`  ├─ Requests:  ${pc.cyan(decisions.forwarded + decisions.blocked)}`)
+        console.log(`  ├─ Blocked:   ${pc.red(decisions.blocked)}`)
         console.log(`  └─ Errors:    ${pc.red(stats.errors || 0)}`)
       } else {
         console.log(
@@ -297,10 +319,34 @@ program
 
       if (res.ok) {
         const rules: any[] = await res.json()
-        console.log(`${pc.green('●')} Registry:  ${pc.bold(rules.length + ' Rules Loaded')}`)
+        console.log(`${pc.green('●')} Registry:  ${pc.bold(rules.length + ' destinations')}`)
+
+        // What the proxy can actually do with each one, as the proxy derives
+        // it. The registry used to list six destinations and serve one, and
+        // there was no surface that would have told anyone.
+        rules.forEach((rule, i) => {
+          const last = i === rules.length - 1
+          console.log(
+            `  ${last ? '└─' : '├─'} ${rule.id.padEnd(15)} ${supportLabel(rule.support)}` +
+              pc.dim(` ${rule.transport}`),
+          )
+        })
+
+        const unsupported = rules.filter((r) => r.support === 'unsupported')
+        if (unsupported.length > 0) {
+          const subject = unsupported.length === 1 ? 'Its payload' : 'Their payloads'
+          console.log(
+            pc.yellow(
+              `     ${unsupported.length} refused at /ingest: ${unsupported
+                .map((r) => r.id)
+                .join(', ')}. ${subject} cannot be scrubbed, so nothing is forwarded.`,
+            ),
+          )
+        }
+
         const overrides = rules.filter((r) => r._isOverride).length
         if (overrides > 0) {
-          console.log(`  └─ Overrides: ${pc.yellow(overrides + ' active')}`)
+          console.log(`     Overrides: ${pc.yellow(overrides + ' active')}`)
         }
       }
     } catch {

@@ -1,15 +1,23 @@
 import { useState } from 'react'
 import { X, Plus, Trash2, Save } from 'lucide-react'
-import type { DestinationRule } from '@sluice/shared'
+import type { DestinationRuleView } from '@sluice/shared'
 
 interface RuleEditorProps {
-  rule: DestinationRule
+  rule: DestinationRuleView
   onClose: () => void
-  onSave: (updatedRule: DestinationRule) => void
+  onSave: (updatedRule: DestinationRuleView) => void
+}
+
+/** Why a transport is a statement about the vendor rather than a setting. */
+const TRANSPORT_HELP: Record<string, string> = {
+  pixel: 'The payload is the query string, so scrubbing the URL scrubs all of it.',
+  json: 'The payload is a JSON body sent to the endpoint the browser targeted.',
+  opaque:
+    'The payload is encoded, so neither scrub pass can read it. Only an adapter that decodes it can serve this vendor; without one the destination is refused at /ingest.',
 }
 
 export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
-  const [editedRule, setEditedRule] = useState<DestinationRule>({ ...rule })
+  const [editedRule, setEditedRule] = useState<DestinationRuleView>({ ...rule })
 
   const addTransformation = () => {
     setEditedRule({
@@ -51,7 +59,23 @@ export function RuleEditor({ rule, onClose, onSave }: RuleEditorProps) {
         </div>
 
         <div className="modal-body">
+          {/* Read-only, like the match-key chip below and for the same reason.
+              The transport is a fact about how the vendor's beacon is built,
+              and the support level is derived from it — changing it in a
+              dropdown would not change the vendor, it would only make the
+              registry lie again. */}
           <div className="form-group">
+            <label>Transport</label>
+            <div
+              style={{ fontSize: '12px', color: 'var(--accents-5)' }}
+              title={TRANSPORT_HELP[editedRule.transport]}
+            >
+              <strong>{editedRule.transport}</strong> · support: {editedRule.support}
+              <div style={{ marginTop: '4px' }}>{TRANSPORT_HELP[editedRule.transport]}</div>
+            </div>
+          </div>
+
+          <div className="form-group" style={{ marginTop: '16px' }}>
             <label>Category</label>
             <select
               value={editedRule.category}

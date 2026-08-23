@@ -92,8 +92,12 @@ export function renderCompose(config: SluiceConfig): string {
     `      - SLUICE_HASH_SECRET=${config.hashSecret}`,
     `      - SLUICE_ALLOWED_ORIGINS=${config.allowedOrigins.join(',')}`,
     '      - SLUICE_ENABLE_CACHE=true',
+    // Blank on purpose: an adapter with no credentials skips the forward, which
+    // is a visible empty line here rather than a variable nobody knew to set.
     '      - GA4_MEASUREMENT_ID=',
     '      - GA4_API_SECRET=',
+    '      - META_PIXEL_ID=',
+    '      - META_ACCESS_TOKEN=',
     '    depends_on:',
     '      - redis',
     '  redis:',

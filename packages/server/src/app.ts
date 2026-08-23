@@ -22,6 +22,7 @@ import { createWebhookRouter } from './webhooks/cmp'
 import { StorageProvider, HybridStorageProvider } from './engine/storage'
 import { getServerConfig, ServerConfig } from './config'
 import { getAdapter, VendorContext, VendorForward } from './destinations/adapters'
+import { supportFor, withSupport } from './destinations/support'
 
 /**
  * The one persistent identifier Sluice writes, and only after a consent record
@@ -182,9 +183,14 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
   /**
    * Admin: rule overrides.
    */
+  /**
+   * Each rule with what this deployment can actually do with it. `support` is
+   * derived per request rather than stored: it depends on which adapters this
+   * build registers, which is a property of the code and not of the rule.
+   */
   app.get('/api/rules', async (c) => {
     if (!requireAdmin(c, config)) return c.json({ error: 'Unauthorized' }, 403)
-    return c.json(await ruleManager.getAllRules())
+    return c.json((await ruleManager.getAllRules()).map(withSupport))
   })
 
   /**
@@ -401,6 +407,25 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
         destination,
         decision: 'blocked',
         reason: 'evidence_unavailable',
+        purposesRequired: rule.category,
+      })
+      return c.body(null, 204)
+    }
+
+    // A destination this build cannot serve is refused before anything is
+    // built, not forwarded on the hope that the passthrough copes. The case
+    // that matters is an encoded payload — Mixpanel's base64 `data`, Hotjar's
+    // recording envelope — where neither scrub pass can see inside, so a
+    // forward would carry personal data under an audit record truthfully
+    // reporting that nothing was removed. Fail-closed applies to the evidence
+    // as much as to the traffic.
+    if (supportFor(rule) === 'unsupported') {
+      metrics.recordRequest(destination, 'blocked')
+      await auditLogger.log({
+        userId,
+        destination,
+        decision: 'blocked',
+        reason: 'destination_unsupported',
         purposesRequired: rule.category,
       })
       return c.body(null, 204)

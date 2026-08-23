@@ -58,7 +58,12 @@ describe('TransformationActionSchema', () => {
 })
 
 describe('DestinationRuleSchema', () => {
-  const minimal = { id: 'ga4', category: 'analytics', endpoints: ['google-analytics.com'] }
+  const minimal = {
+    id: 'ga4',
+    category: 'analytics',
+    endpoints: ['google-analytics.com'],
+    transport: 'pixel',
+  }
 
   it('defaults transformations to an empty list', () => {
     const parsed = DestinationRuleSchema.parse(minimal)
@@ -88,6 +93,26 @@ describe('DestinationRuleSchema', () => {
 
   it('rejects endpoints that are not strings', () => {
     expect(DestinationRuleSchema.safeParse({ ...minimal, endpoints: [42] }).success).toBe(false)
+  })
+
+  /**
+   * `transport` is required rather than defaulted, and a rule override that
+   * will not parse is discarded in favour of the registry. That makes a
+   * pre-transport override fall back to the reviewed rule, where a default
+   * would have quietly answered the question on its behalf — and the question
+   * is whether the payload can be scrubbed at all.
+   */
+  it('rejects a rule that does not say how the vendor carries its payload', () => {
+    const { transport: _transport, ...withoutTransport } = minimal
+    expect(DestinationRuleSchema.safeParse(withoutTransport).success).toBe(false)
+  })
+
+  it.each(['pixel', 'json', 'opaque'])('accepts transport %s', (transport) => {
+    expect(DestinationRuleSchema.parse({ ...minimal, transport }).transport).toBe(transport)
+  })
+
+  it('rejects a transport nobody has taught the scrub passes to read', () => {
+    expect(DestinationRuleSchema.safeParse({ ...minimal, transport: 'grpc' }).success).toBe(false)
   })
 })
 
@@ -210,7 +235,12 @@ describe('AuditRecordSchema', () => {
  * that fails to parse is discarded in favour of the registry.
  */
 describe('hash modes on a destination rule', () => {
-  const base = { id: 'meta', category: 'marketing', endpoints: ['facebook.com/tr'] }
+  const base = {
+    id: 'meta',
+    category: 'marketing',
+    endpoints: ['facebook.com/tr'],
+    transport: 'pixel',
+  }
 
   it('defaults to no mode, which the transformer reads as pseudonymize', () => {
     const parsed = DestinationRuleSchema.parse({

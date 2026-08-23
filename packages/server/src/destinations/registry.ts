@@ -36,6 +36,10 @@ export function getDefaultRule(id: string): DestinationRule {
     id,
     category: UNKNOWN_DESTINATION_CATEGORY,
     endpoints: [],
+    // Refused by `supportFor` as unconditionally as `unknown` is refused by
+    // `hasConsent`. A payload nobody declared a transport for is not one we can
+    // claim to have scrubbed, so it is not one we forward.
+    transport: 'opaque',
     transformations: [
       { path: 'email', action: 'strip' },
       { path: 'user_id', action: 'hash' },

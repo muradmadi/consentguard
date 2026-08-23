@@ -6,6 +6,7 @@ const rule = (over: Partial<DestinationRule> = {}): DestinationRule => ({
   id: 'test',
   category: 'marketing',
   endpoints: ['vendor.test', 'other.test/tr'],
+  transport: 'json',
   transformations: [],
   ...over,
 })

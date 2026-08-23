@@ -14,6 +14,7 @@ const rule: DestinationRule = {
   id: 'mixpanel',
   category: 'analytics',
   endpoints: ['api.mixpanel.com'],
+  transport: 'json',
   transformations: [
     { path: 'properties.$email', action: 'hash' },
     { path: 'properties.ip', action: 'strip' },

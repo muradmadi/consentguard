@@ -4,6 +4,9 @@ export const tiktok: DestinationRule = {
   id: 'tiktok',
   category: 'marketing',
   endpoints: ['analytics.tiktok.com', 'business-api.tiktok.com'],
+  // The pixel posts a JSON envelope to the endpoint it was going to anyway,
+  // so the scrubbed body reaches the vendor without a translation step.
+  transport: 'json',
   upstreamUrl: 'https://analytics.tiktok.com/api/v2/track',
   transformations: [
     {

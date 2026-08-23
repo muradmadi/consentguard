@@ -14,6 +14,7 @@ let pristineOpen: typeof XMLHttpRequest.prototype.open
 let pristineSend: typeof XMLHttpRequest.prototype.send
 let pristineBeacon: unknown
 let pristineImageSrc: PropertyDescriptor | undefined
+let pristineImageSrcset: PropertyDescriptor | undefined
 let pristineSetAttribute: typeof HTMLImageElement.prototype.setAttribute
 
 /**
@@ -34,6 +35,7 @@ beforeEach(() => {
   pristineSend = XMLHttpRequest.prototype.send
   pristineBeacon = (navigator as any).sendBeacon
   pristineImageSrc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+  pristineImageSrcset = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'srcset')
   pristineSetAttribute = HTMLImageElement.prototype.setAttribute
 
   document.head.innerHTML = ''
@@ -64,6 +66,9 @@ afterEach(() => {
     writable: true,
   })
   if (pristineImageSrc) Object.defineProperty(HTMLImageElement.prototype, 'src', pristineImageSrc)
+  if (pristineImageSrcset) {
+    Object.defineProperty(HTMLImageElement.prototype, 'srcset', pristineImageSrcset)
+  }
   HTMLImageElement.prototype.setAttribute = pristineSetAttribute
 })
 
@@ -345,6 +350,95 @@ describe('<img> pixel interception', () => {
     const img = document.createElement('img')
     img.setAttribute('alt', PIXEL)
     expect(img.getAttribute('alt')).toBe(PIXEL)
+  })
+
+  /**
+   * A candidate list is a list of URLs the browser will fetch one of, which
+   * makes srcset exactly as usable a beacon transport as src. It used to be
+   * uncovered on the grounds that nothing uses it, which is not a property
+   * anyone can check.
+   */
+  it('reroutes a tracking url in srcset, keeping its descriptor', async () => {
+    await loadClient()
+    const img = document.createElement('img')
+    img.srcset = `${PIXEL} 2x`
+
+    const [url, descriptor] = img.srcset.split(' ')
+    expect(new URL(url).pathname).toBe('/analytics/ingest/facebook_pixel')
+    expect(new URL(url).searchParams.get('original')).toBe(PIXEL)
+    expect(descriptor).toBe('2x')
+  })
+
+  it('rewrites only the tracking candidates in a mixed list', async () => {
+    await loadClient()
+    const img = document.createElement('img')
+    img.setAttribute('srcset', `https://cdn.example.com/a.png 1x, ${PIXEL} 2x`)
+
+    const [first, second] = img.getAttribute('srcset')!.split(',')
+    expect(first.trim()).toBe('https://cdn.example.com/a.png 1x')
+    expect(new URL(second.trim().split(' ')[0]).pathname).toBe('/analytics/ingest/facebook_pixel')
+  })
+
+  it('leaves a srcset with no tracker in it untouched', async () => {
+    await loadClient()
+    const img = document.createElement('img')
+    const list = 'https://cdn.example.com/a.png 1x, https://cdn.example.com/b.png 2x'
+    img.srcset = list
+    expect(img.srcset).toBe(list)
+  })
+})
+
+/**
+ * A pixel the parser appends never reaches the patched src setter, so without
+ * the observer it walks straight past the firewall. This catches what the
+ * parser appends after the Sluice tag; what is above the tag is an install
+ * requirement, not something the client can close.
+ */
+describe('<img> pixels the parser inserted', () => {
+  const PIXEL = 'https://www.facebook.com/tr/?id=1&ev=PageView'
+
+  /** Appends an element with its src already set, as the HTML parser does. */
+  function parseInto(html: string): HTMLImageElement {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    host.innerHTML = html
+    return host.querySelector('img')!
+  }
+
+  it('reroutes a pixel whose src the setter never saw', async () => {
+    await loadClient()
+    const img = parseInto(`<img src="${PIXEL}" width="1" height="1">`)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const sent = new URL(img.getAttribute('src')!)
+    expect(sent.pathname).toBe('/analytics/ingest/facebook_pixel')
+    expect(sent.searchParams.get('original')).toBe(PIXEL)
+  })
+
+  it('leaves an ordinary image the parser inserted alone', async () => {
+    await loadClient()
+    const img = parseInto('<img src="https://cdn.example.com/logo.png">')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(img.getAttribute('src')).toBe('https://cdn.example.com/logo.png')
+    expect(img.getAttribute('data-sluice-rerouted')).toBeNull()
+  })
+
+  /**
+   * Rewriting is once-only. Without the marker the observer would see its own
+   * assignment as a new node's src and wrap the proxy URL in another one.
+   */
+  it('does not reroute a pixel it has already rerouted', async () => {
+    await loadClient()
+    const img = parseInto(`<img src="${PIXEL}">`)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const once = img.getAttribute('src')
+
+    document.body.appendChild(img)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(img.getAttribute('src')).toBe(once)
+    expect(new URL(once!).searchParams.get('original')).toBe(PIXEL)
   })
 })
 

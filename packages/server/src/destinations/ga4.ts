@@ -12,6 +12,8 @@ export const ga4: DestinationRule = {
   id: 'ga4',
   category: 'analytics',
   endpoints: ['google-analytics.com', 'analytics.google.com'],
+  // A gtag beacon encodes the event as query-string params on /g/collect.
+  transport: 'pixel',
   transformations: [
     { path: 'user_id', action: 'hash' },
     { path: 'events.*.params.email', action: 'hash' },

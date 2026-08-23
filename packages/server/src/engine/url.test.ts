@@ -9,6 +9,7 @@ const BARE: DestinationRule = {
   id: 'testvendor',
   category: 'analytics',
   endpoints: [],
+  transport: 'pixel',
   transformations: [],
 }
 

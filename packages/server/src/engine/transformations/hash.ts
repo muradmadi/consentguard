@@ -68,6 +68,13 @@ export const applyHash = (obj: any, head: string, hasher: Hasher, spec: HashSpec
   if (!obj || typeof obj !== 'object' || typeof obj[head] !== 'string') return null
 
   if (spec.mode === 'match_key' && spec.normalize) {
+    // Meta's pixel with Advanced Matching turned on hashes `em` and `ph` in the
+    // browser, so the value arriving here is already the digest the vendor will
+    // match against. Hashing it a second time produces a well-formed digest of a
+    // digest, which matches nobody — the exact silent failure the modes exist to
+    // prevent. Nothing changed, so there is no audit entry either.
+    if (isSha256Hex(obj[head])) return null
+
     const digest = hasher.matchKey(obj[head], spec.normalize)
     if (digest === null) {
       // Declared a match key, cannot be one. Forwarding it unchanged would leak
@@ -81,4 +88,16 @@ export const applyHash = (obj: any, head: string, hasher: Hasher, spec: HashSpec
 
   obj[head] = hasher.pseudonymize(obj[head])
   return { action: 'hash', mode: 'pseudonymize' }
+}
+
+/**
+ * A value that is already the vendor's match key.
+ *
+ * Only consulted for `match_key`, where the output is an unsalted SHA-256 and
+ * the collision with a genuine 64-character hex payload value is not worth
+ * worrying about. A pseudonymising hash still re-hashes: its output is keyed to
+ * this deployment, so an incoming digest is somebody else's value, not ours.
+ */
+function isSha256Hex(value: string): boolean {
+  return /^[0-9a-f]{64}$/i.test(value)
 }

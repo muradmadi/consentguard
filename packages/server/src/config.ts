@@ -204,6 +204,15 @@ export const getServerConfig = (env: any = {}) => {
       measurementId: env.GA4_MEASUREMENT_ID || env.ga4MeasurementId || '',
       apiSecret: env.GA4_API_SECRET || env.ga4ApiSecret || '',
     },
+    // Meta's Conversions API is addressed to one pixel id and authenticated by
+    // a long-lived token. Without both, the adapter skips and the event is
+    // dropped rather than sent somewhere it cannot be attributed.
+    meta: {
+      pixelId: env.META_PIXEL_ID || env.metaPixelId || '',
+      accessToken: env.META_ACCESS_TOKEN || env.metaAccessToken || '',
+      // Routes events to the Test Events tab instead of the live dataset.
+      testEventCode: env.META_TEST_EVENT_CODE || env.metaTestEventCode || '',
+    },
   }
 }
 

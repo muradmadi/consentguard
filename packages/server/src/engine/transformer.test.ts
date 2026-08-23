@@ -6,7 +6,7 @@ import { DestinationRule } from '@sluice/shared'
 const hasher = createHasher('test-hash-secret')
 
 function rule(transformations: DestinationRule['transformations']): DestinationRule {
-  return { id: 'test', category: 'analytics', endpoints: [], transformations }
+  return { id: 'test', category: 'analytics', endpoints: [], transport: 'json', transformations }
 }
 
 function scrub(payload: any, r: DestinationRule, options: Omit<ScrubOptions, 'hasher'> = {}) {

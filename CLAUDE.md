@@ -81,6 +81,10 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
    is configured and cannot write means a forward could not be evidenced, so it is not
    made: blocked (`204`) with `evidence_unavailable`. Off with `SLUICE_AUDIT_REQUIRED=false`;
    no sink configured is a choice, not a failure, and does not block.
+   **6a. Support gate.** `supportFor(rule)` — `unsupported` is blocked (`204`) with
+   `destination_unsupported`. That is the encoded-payload case: neither scrub pass can
+   read a base64 batch or a recording envelope, so a forward would carry personal data
+   under an audit record truthfully reporting that nothing was removed.
 7. **Scrub + build** — a registered `VendorAdapter` translates the intercepted beacon
    into the vendor's server-side schema and calls `scrubPayload` itself. With no
    adapter, a generic JSON passthrough scrubs and forwards to `rule.upstreamUrl`.
@@ -135,14 +139,27 @@ normalize.ts`), then unsalted SHA-256 — and is allowed only where a rule decla
   an adapter's own URL included — so scrub-before-egress and only-where-the-rule-says
   each live in exactly one place.
 - **Destination rules** — `destinations/<vendor>.ts`, registered in `destinations/registry.ts`.
-  A rule is declarative: `id`, `category`, `endpoints`, optional `upstreamUrl`, `transformations[]`.
-  A hash transformation may carry `mode` and `normalize`; the schema rejects `match_key`
-  without a format, and either field on an action that does not hash. A rule override that
-  fails to parse is discarded in favour of the registry, so the schema is the gate.
+  A rule is declarative: `id`, `category`, `endpoints`, `transport`, optional `upstreamUrl`,
+  `transformations[]`. A hash transformation may carry `mode` and `normalize`; the schema
+  rejects `match_key` without a format, and either field on an action that does not hash.
+  A rule override that fails to parse is discarded in favour of the registry, so the schema
+  is the gate — which is why `transport` is required rather than defaulted.
+- **Transport and support** — `transport` states how the vendor's beacon carries its
+  payload: `pixel` (the query string, so `scrubUrl` alone is a complete scrub), `json` (a
+  body sent to the endpoint the browser targeted), or `opaque` (encoded, so neither pass
+  can read it). `destinations/support.ts` derives the support level from that plus whether
+  an adapter is registered — `adapter`, `passthrough`, or `unsupported` — and it is never
+  written by hand, for the same reason the audit is never built from a rule. `/api/rules`
+  attaches it, the dashboard badges it, and `sluice status` prints it per destination.
 - **Vendor adapters** — `destinations/adapters/<vendor>.ts`, registered in `adapters/index.ts`.
-  Only needed when the vendor's server-side API differs in shape from what the browser sent.
-- **Interception patterns** — `packages/client/src/patterns.ts` maps a domain substring to a
-  destination id. It must stay in sync with the server registry, and
+  Needed when the vendor's server-side API differs in shape from what the browser sent, and
+  the only way to serve an `opaque` transport at all. GA4, Meta CAPI, and Mixpanel have one.
+- **Interception patterns** — `packages/client/src/patterns.ts` maps `host[/pathPrefix]` to a
+  destination id, and exports the `matchDestination` both halves use. Matching parses the URL
+  and reads the host under the same subdomain rule as `engine/egress.ts`; a path prefix has to
+  match whole segments. It was `url.includes(domain)` against the whole URL, which rerouted
+  first-party traffic that merely named a vendor in its query string. It must stay in sync
+  with the server registry, and
   `server/src/destinations/patterns.test.ts` enforces both halves: no pattern may name a
   destination the registry lacks, and no rule endpoint may go unmatched. That suite is
   excluded from the server's `typecheck` — it imports across a package boundary, which
@@ -183,6 +200,22 @@ start-up error naming the variable. The development fallbacks are generated per 
 so pseudonyms are not comparable across restarts — which is the point, and the reason it
 is not how to run this for real. `sluice init` writes both into the compose file it
 generates. `SLUICE_HASH_SALT` is no longer read; setting it logs a warning and nothing else.
+
+### Adapter credentials
+
+Not required to start. An adapter without them reports `{ skip: true }` and the request
+is dropped with the usual opaque `204` rather than sent somewhere it cannot be attributed.
+
+| Variable               | Adapter | Meaning                                                        |
+| ---------------------- | ------- | -------------------------------------------------------------- |
+| `GA4_MEASUREMENT_ID`   | GA4     | Measurement Protocol stream id.                                |
+| `GA4_API_SECRET`       | GA4     | Measurement Protocol secret for that stream.                   |
+| `META_PIXEL_ID`        | Meta    | The dataset a Conversions API call is addressed to.            |
+| `META_ACCESS_TOKEN`    | Meta    | Sent in the body, never the URL — the URL is what gets logged. |
+| `META_TEST_EVENT_CODE` | Meta    | Optional. Routes to Test Events instead of the live dataset.   |
+
+Mixpanel needs none: the project token travels in `properties.token` where the SDK put
+it, so an unconfigured deployment still gets a real scrub there rather than a skip.
 
 ### Invariants
 
@@ -267,23 +300,22 @@ Run `just check` and report its real output. Never claim a change works without 
 
 Real, verified, and unfixed. Do not re-diagnose these from scratch:
 
-- **An `<img>` in the initial HTML is not intercepted.** The interceptor patches the
-  `HTMLImageElement.prototype.src` setter and `setAttribute`, which covers every pixel
-  built in script. A pixel already in the served markup has its `src` set by the parser
-  and never reaches either. `srcset` is not covered at all.
-- **Load-order fragility.** A tracker that captures `window.fetch` before the Sluice
-  bundle executes keeps the unpatched reference. Scripts above the Sluice tag in the
-  initial HTML are never neutralized.
+- **A pixel above the Sluice tag is never intercepted.** An `<img>` written into the
+  initial HTML above the tag has its `src` set by the parser, and a tracker that captured
+  `window.fetch` before the bundle ran keeps the unpatched reference. Neither is closable
+  in the client; both are load order. `docs/install.md` states the tag-goes-first
+  requirement, and the mutation observer covers `<img>` and `<script>` the parser appends
+  below the tag. There is deliberately no document-ready sweep: by then the requests have
+  gone, so a sweep would duplicate the event rather than prevent the leak.
 - **A session identifier is still stored before consent.** The client writes one
   `sessionStorage` entry on page load; it dies with the tab and is never promoted to
   anything persistent until a consent record exists, but it is still storage on a
   visitor's device. Whether the firewall's own routing identifier is strictly necessary
   is a judgement call, not a settled one.
-- **One real adapter.** `adapters/index.ts` registers GA4 and nothing else. The other
-  five registry entries fall through to generic JSON passthrough; `facebook.ts` has a
-  literal `<PIXEL_ID>` placeholder in its `upstreamUrl` and cannot work. Its `em` and `ph`
-  match keys are declared and tested but have never been sent to Meta, because nothing
-  can reach Meta yet.
+- **Three destinations have no adapter.** Amplitude and TikTok do not need one — both
+  send readable JSON to the endpoint the browser targeted, which is what `passthrough`
+  means. Hotjar does: its payload is a recording envelope, so it is `unsupported` and
+  refused at `/ingest` until somebody writes one that can read it.
 - **Rule health only covers destinations the registry knows.** `/api/rule-health` joins
   the audit against `RuleManager.getAllRules()`, which iterates `REGISTRY_KEYS`. An
   override for an id the registry lacks gets no health row, because `StorageProvider`

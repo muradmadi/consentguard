@@ -18,7 +18,7 @@ import { RuleEditor } from './components/RuleEditor'
 import { LiveTraffic } from './components/LiveTraffic'
 import { AuditFilterBar } from './components/AuditFilterBar'
 import { EvidencePanel, StatusCard } from './components/EvidencePanel'
-import type { RuleHealthReport, SealedAuditRecord, DestinationRule } from '@sluice/shared'
+import type { RuleHealthReport, SealedAuditRecord, DestinationRuleView } from '@sluice/shared'
 import type { ChainStatus } from '@sluice/shared'
 import { shortHash, type Health } from './lib/health'
 
@@ -26,6 +26,43 @@ import { shortHash, type Health } from './lib/health'
 function decisionBadge(decision: SealedAuditRecord['decision']): string {
   if (decision === 'blocked' || decision === 'failed') return 'badge-error'
   return 'badge-success'
+}
+
+/**
+ * What the proxy can actually do with a destination, as the proxy derived it.
+ *
+ * The registry used to list six destinations and serve one, and no operator
+ * surface said so. This is not computed here for the same reason the audit is
+ * not built from a rule: only the proxy knows which adapters its build
+ * registers, so the dashboard reports what it was told.
+ */
+const SUPPORT: Record<string, { badge: string; title: string }> = {
+  adapter: {
+    badge: 'badge-success',
+    title: "A vendor adapter translates the beacon into this vendor's server-side API.",
+  },
+  passthrough: {
+    badge: 'badge-secondary',
+    title:
+      'No adapter: the scrubbed beacon is forwarded to the endpoint the browser targeted. Real support for a transport both scrub passes can read.',
+  },
+  unsupported: {
+    badge: 'badge-error',
+    title:
+      'Refused at /ingest. The payload is encoded, so it cannot be scrubbed — and an unscrubbable payload is not forwarded.',
+  },
+}
+
+function SupportBadge({ rule }: { rule: DestinationRuleView }) {
+  const support = SUPPORT[rule.support] ?? SUPPORT.unsupported
+  return (
+    <span
+      className={`badge ${support.badge}`}
+      title={`${support.title} Transport: ${rule.transport}.`}
+    >
+      {rule.support}
+    </span>
+  )
 }
 
 /**
@@ -47,14 +84,14 @@ function App() {
   const [stats, setStats] = useState<any>(null)
   const [health, setHealth] = useState<Health | null>(null)
   const [ruleHealth, setRuleHealth] = useState<RuleHealthReport | null>(null)
-  const [rules, setRules] = useState<DestinationRule[]>([])
+  const [rules, setRules] = useState<DestinationRuleView[]>([])
   const [logs, setLogs] = useState<SealedAuditRecord[]>([])
   const [nextCursor, setNextCursor] = useState<number | null>(null)
   const [filters, setFilters] = useState<AuditFilters>({})
   const [chain, setChain] = useState<ChainStatus | null>(null)
   const [verifying, setVerifying] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [selectedRule, setSelectedRule] = useState<DestinationRule | null>(null)
+  const [selectedRule, setSelectedRule] = useState<DestinationRuleView | null>(null)
   const [selectedLog, setSelectedLog] = useState<SealedAuditRecord | null>(null)
   const [, setIsLoading] = useState(false)
   const [authed, setAuthed] = useState(() => getToken() !== '')
@@ -142,7 +179,7 @@ function App() {
     }
   }
 
-  const handleSaveRule = async (updatedRule: DestinationRule) => {
+  const handleSaveRule = async (updatedRule: DestinationRuleView) => {
     setIsLoading(true)
     try {
       await updateRule(updatedRule.id, updatedRule)
@@ -345,6 +382,7 @@ function App() {
                   <tr>
                     <th>ID</th>
                     <th>CATEGORY</th>
+                    <th>SUPPORT</th>
                     <th>TRANSFORMATIONS</th>
                     <th>ACTIONS</th>
                   </tr>
@@ -355,6 +393,9 @@ function App() {
                       <td style={{ fontWeight: 600 }}>{rule.id}</td>
                       <td>
                         <span className="badge badge-secondary">{rule.category}</span>
+                      </td>
+                      <td>
+                        <SupportBadge rule={rule} />
                       </td>
                       <td>
                         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
@@ -438,6 +479,7 @@ function App() {
                   <tr>
                     <th>DESTINATION</th>
                     <th>ENDPOINTS</th>
+                    <th>SUPPORT</th>
                     <th>STATUS</th>
                   </tr>
                 </thead>
@@ -462,6 +504,16 @@ function App() {
                           Unknown (Captured from traffic)
                         </td>
                         <td>
+                          {/* getDefaultRule declares no transport, so /ingest
+                              refuses it — the same answer the registry gives. */}
+                          <span
+                            className="badge badge-error"
+                            title="Refused at /ingest: a destination nobody declared has no transport we can scrub."
+                          >
+                            unsupported
+                          </span>
+                        </td>
+                        <td>
                           <span className="badge badge-error">Action Required</span>
                         </td>
                       </tr>
@@ -471,6 +523,9 @@ function App() {
                       <td style={{ fontWeight: 600 }}>{rule.id}</td>
                       <td style={{ color: 'var(--accents-4)', fontSize: '12px' }}>
                         {rule.endpoints.join(', ')}
+                      </td>
+                      <td>
+                        <SupportBadge rule={rule} />
                       </td>
                       <td>
                         {(rule as any)._isOverride ? (

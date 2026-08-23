@@ -46,6 +46,35 @@ export const NormalizeFormatSchema = z.enum(['email', 'phone'])
 export type NormalizeFormat = z.infer<typeof NormalizeFormatSchema>
 
 /**
+ * How the vendor's beacon actually carries its payload. A fact about the vendor,
+ * not a claim about this repository — which is what makes a support level
+ * derivable rather than asserted.
+ *
+ * `pixel` puts the payload in the query string, so `scrubUrl` alone is a complete
+ * scrub of it. `json` puts it in a body sent to the endpoint the browser was
+ * already targeting, so `scrubPayload` is. `opaque` encodes it — Mixpanel
+ * base64s a `data` parameter, Hotjar wraps a recording — and neither pass can
+ * see inside, so a passthrough would forward personal data while auditing a
+ * clean forward. Only an adapter that decodes it can serve an opaque vendor.
+ */
+export const TransportSchema = z.enum(['pixel', 'json', 'opaque'])
+export type Transport = z.infer<typeof TransportSchema>
+
+/**
+ * What this deployment can actually do with a destination. Derived from the
+ * transport above and whether an adapter is registered; never written by hand,
+ * for the same reason the audit is never built from a rule's declarations.
+ *
+ * `adapter` translates the beacon into the vendor's server-side API.
+ * `passthrough` forwards the scrubbed beacon to the endpoint the browser
+ * targeted, which is genuine support for a vendor whose transport we can read.
+ * `unsupported` is refused at `/ingest`: a payload that cannot be scrubbed is
+ * one that is not forwarded.
+ */
+export const SupportLevelSchema = z.enum(['adapter', 'passthrough', 'unsupported'])
+export type SupportLevel = z.infer<typeof SupportLevelSchema>
+
+/**
  * The category `getDefaultRule` gives a destination nobody declared, and the one
  * category `hasConsent` refuses outright. A rule that arrived malformed is not a
  * rule anyone consented to.
@@ -94,16 +123,34 @@ export type Transformation = z.infer<typeof TransformationSchema>
 /**
  * Destination Rule Schema
  * Defines how a specific analytics/marketing destination should be handled.
+ *
+ * `transport` is required rather than defaulted. An override written against the
+ * older schema fails to parse and is discarded in favour of the registry, which
+ * is the documented behaviour for a malformed override and fails closed to the
+ * reviewed value — where a default would quietly decide the question instead.
  */
 export const DestinationRuleSchema = z.object({
   id: z.string(),
   category: z.string(), // e.g., 'analytics', 'marketing'
   endpoints: z.array(z.string()), // Domain patterns to match
+  transport: TransportSchema,
   upstreamUrl: z.string().optional(), // Default URL to forward to
   transformations: z.array(TransformationSchema).default([]),
 })
 
 export type DestinationRule = z.infer<typeof DestinationRuleSchema>
+
+/**
+ * A rule as an operator surface sees it: the rule plus what this deployment can
+ * actually do with it. `support` is attached by the server at read time and is
+ * never stored, because it is derived from code — which adapters are registered
+ * — rather than from anything a rule declares about itself.
+ */
+export const DestinationRuleViewSchema = DestinationRuleSchema.extend({
+  support: SupportLevelSchema,
+})
+
+export type DestinationRuleView = z.infer<typeof DestinationRuleViewSchema>
 
 /**
  * Ingest Request Schema
