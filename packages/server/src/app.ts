@@ -341,7 +341,23 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
       return c.body(null, 204)
     }
 
+    // A destination no rule describes is refused, and the refusal is recorded.
+    // Every other block on this path leaves a record — the egress check audits
+    // its refusals because a refusal is evidence too — and this one used to
+    // return a bare 400 and vanish. The case that matters is not a mistyped
+    // path: it is a browser still running a client bundle from before a
+    // registry change, whose beacons are now dropped by a firewall that cannot
+    // say it dropped them. The status stays 400 rather than the opaque 204,
+    // because this is an integration mistake and the developer making it
+    // benefits from being told.
     if (!(await ruleManager.isSupported(destination))) {
+      metrics.recordRequest(destination, 'blocked')
+      await auditLogger.log({
+        userId,
+        destination,
+        decision: 'blocked',
+        reason: 'unknown_destination',
+      })
       return c.json({ error: 'unsupported_destination' }, 400)
     }
 

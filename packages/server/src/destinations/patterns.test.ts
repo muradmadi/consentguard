@@ -12,6 +12,11 @@ import { REGISTRY_KEYS, getDestinationRule } from './registry'
  *
  * The coverage assertion runs the real `matchDestination`, not a substring
  * test standing in for it, because the matcher is the thing that drifted.
+ *
+ * Only the cross-package contract lives here. What a host pattern means is the
+ * matcher's own business and is asserted in `client/src/patterns.test.ts`,
+ * which the client package actually runs — this file imports across a package
+ * boundary and is excluded from the server's `typecheck` for it.
  */
 const match = (url: string) => matchDestination(url, INTERCEPTION_PATTERNS)
 
@@ -34,51 +39,5 @@ describe('client interception patterns', () => {
         expect(match(asUrl(endpoint)), `endpoint "${endpoint}" of "${id}"`).toBe(id)
       }
     }
-  })
-})
-
-/**
- * Matching used to be `url.includes(domain)` against the whole URL, so a
- * first-party request naming a vendor anywhere in its query string was quietly
- * rerouted into the firewall, and any longer name ending in a declared one
- * matched it. Losing real application traffic to an analytics proxy is the
- * expensive half of that.
- */
-describe('lookalikes and near misses', () => {
-  it('does not match a host that merely ends with a declared name', () => {
-    expect(match('https://notamplitude.com/api')).toBeNull()
-  })
-
-  it('does not match a declared name used as a prefix of a longer host', () => {
-    expect(match('https://facebook.com.evil.test/tr')).toBeNull()
-  })
-
-  it('does not match a first-party URL that names a vendor in its query string', () => {
-    expect(match('https://app.example.com/?ref=amplitude.com')).toBeNull()
-  })
-
-  it('does not match a vendor named in the path of another host', () => {
-    expect(match('https://cdn.example.com/mixpanel.com/shim.js')).toBeNull()
-  })
-
-  it('does not let a path prefix match a longer first segment', () => {
-    // facebook.com/tr is the beacon; /track is somebody else's endpoint.
-    expect(match('https://www.facebook.com/track?x=1')).toBeNull()
-  })
-
-  it('still matches the beacon path and anything under it', () => {
-    expect(match('https://www.facebook.com/tr?id=1&ev=PageView')).toBe('facebook_pixel')
-    expect(match('https://www.facebook.com/tr/')).toBe('facebook_pixel')
-  })
-
-  it('matches a subdomain of a declared host', () => {
-    expect(match('https://api-js.mixpanel.com/track/')).toBe('mixpanel')
-    expect(match('https://api2.amplitude.com/2/httpapi')).toBe('amplitude')
-  })
-
-  it('ignores anything that is not an absolute http(s) URL', () => {
-    expect(match('/analytics/ingest/ga4')).toBeNull()
-    expect(match('data:image/gif;base64,R0lGOD')).toBeNull()
-    expect(match('not a url')).toBeNull()
   })
 })

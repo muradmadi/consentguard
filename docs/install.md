@@ -57,7 +57,6 @@ The bundle reads its configuration from a meta tag or from `window.__sluiceConfi
 | `proxyUrl`                | —            | Absolute proxy URL. Overrides `proxyPath`.                                 |
 | `proxyPath`               | `/analytics` | Path where the proxy is mounted on the app's own origin.                   |
 | `destinations`            | built-in     | Extra `host[/pathPrefix]` → destination id entries, merged with the table. |
-| `domains`                 | —            | Extra hosts to treat as tracking, proxied under destination `unknown`.     |
 | `userId`                  | —            | Pin the identifier instead of using the per-session one.                   |
 | `observeMutations`        | `true`       | Watch the DOM for injected tracker scripts and parser-inserted pixels.     |
 | `dangerouslyAllowOnError` | `false`      | Send directly to the vendor if the proxy is unreachable. Leave it off.     |

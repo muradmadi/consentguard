@@ -14,10 +14,8 @@ export interface ClientConfig {
   proxyUrl?: string
   /** Path where the proxy is mounted on the same origin as the app. Default: /analytics. */
   proxyPath?: string
-  /** Map of domain substring -> destination id. Merged with the built-in registry. */
+  /** Extra `host[/pathPrefix]` -> destination id entries, merged with the built-in table. */
   destinations?: Record<string, string>
-  /** Extra domains to treat as tracking; matched requests are proxied under destination "unknown". */
-  domains?: string[]
   /** Pin the user id instead of the per-session one. */
   userId?: string
   /** If true, watch for dynamically injected <script> tags and neutralize known trackers. */
@@ -149,12 +147,14 @@ export function init(config?: Partial<ClientConfig>) {
   window.__sluiceInitialized = true
 
   const resolved: ResolvedConfig = { ...DEFAULTS, ...config } as ResolvedConfig
+  // There used to be a `domains` option here that mapped an arbitrary host to
+  // the destination id `unknown`. No rule describes that id, so every request
+  // it produced was refused at /ingest and discarded by the caller below — a
+  // documented option whose only effect was to drop the traffic it was asked to
+  // protect. Extending coverage means a destination rule, which is what
+  // `destinations` is for; blocking a host by name is not something this
+  // firewall claims to do.
   const activeDestinations = { ...resolved.destinations }
-  if (resolved.domains) {
-    resolved.domains.forEach((d) => {
-      activeDestinations[d] = activeDestinations[d] || 'unknown'
-    })
-  }
 
   const userId = getSessionUserId(resolved)
   const proxyBase = resolveProxyBase(resolved)

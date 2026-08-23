@@ -824,6 +824,83 @@ describe('Sluice server', () => {
    * which is the same defect as an audit built from a rule's declarations: the
    * evidence was accurate and the payload still carried whatever was in it.
    */
+  /**
+   * A destination no rule describes is refused, and the refusal is recorded.
+   *
+   * This branch used to return a bare 400 and leave nothing behind, which made
+   * it the one decision on the ingest path with no evidence. It is not only a
+   * mistyped integration: a browser running a client bundle from before a
+   * registry change sends beacons under an id the server no longer knows, and
+   * those were dropped by a firewall that could not say it had dropped them.
+   */
+  describe('/ingest a destination the registry does not know', () => {
+    let upstream: ReturnType<typeof vi.fn>
+    let realFetch: typeof globalThis.fetch
+
+    beforeEach(() => {
+      realFetch = globalThis.fetch
+      upstream = vi.fn(async () => new Response(null, { status: 200 }))
+      globalThis.fetch = upstream as unknown as typeof fetch
+    })
+
+    afterEach(() => {
+      globalThis.fetch = realFetch
+    })
+
+    async function latestAudit(app: ReturnType<typeof createApp>) {
+      const res = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
+      return ((await res.json()) as any).records[0]
+    }
+
+    it('refuses it, and never calls upstream', async () => {
+      const app = createApp(storage, DEV_ENV)
+
+      const res = await app.request('/ingest/nosuchvendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'stale-bundle' },
+        body: JSON.stringify({ email: 'alice@example.com' }),
+      })
+
+      expect(res.status).toBe(400)
+      expect(upstream).not.toHaveBeenCalled()
+    })
+
+    it('records the refusal, because a refusal is evidence too', async () => {
+      const app = createApp(storage, DEV_ENV)
+
+      await app.request('/ingest/nosuchvendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'stale-bundle' },
+        body: JSON.stringify({ email: 'alice@example.com' }),
+      })
+
+      expect(await latestAudit(app)).toMatchObject({
+        userId: 'stale-bundle',
+        destination: 'nosuchvendor',
+        decision: 'blocked',
+        reason: 'unknown_destination',
+      })
+    })
+
+    // The counter is a process-wide singleton shared by every createApp, so
+    // this reads the delta across the one call rather than an absolute that
+    // whatever ran earlier in the file has already moved.
+    it('counts it as blocked rather than leaving it out of the metrics', async () => {
+      const app = createApp(storage, DEV_ENV)
+      const blocked = async () => {
+        const res = await app.request('/api/stats', {
+          headers: { Authorization: 'Bearer test-admin' },
+        })
+        return ((await res.json()) as any).requestsTotal['nosuchvendor:blocked'] ?? 0
+      }
+
+      const before = await blocked()
+      await app.request('/ingest/nosuchvendor?cuid=stale-bundle')
+
+      expect(await blocked()).toBe(before + 1)
+    })
+  })
+
   describe('/ingest destinations this build cannot serve', () => {
     const OPAQUE_RULE = {
       id: 'testopaque',
