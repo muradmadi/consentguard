@@ -114,10 +114,21 @@ describe('applyHash', () => {
     expect('ph' in obj).toBe(false)
   })
 
-  it('leaves a value that is not a string alone', () => {
-    const obj = { em: 42 }
-    expect(applyHash(obj, 'em', hasher, { mode: 'pseudonymize' })).toBeNull()
-    expect(obj.em).toBe(42)
+  it('hashes a number as its decimal text', () => {
+    const obj: any = { em: 42 }
+    expect(applyHash(obj, 'em', hasher, { mode: 'pseudonymize' })).toEqual({
+      action: 'hash',
+      mode: 'pseudonymize',
+    })
+    expect(obj.em).toBe(hasher.pseudonymize('42'))
+  })
+
+  it('leaves a value that is not a scalar alone', () => {
+    for (const em of [true, { a: 1 }, [1], null, undefined]) {
+      const obj: any = { em }
+      expect(applyHash(obj, 'em', hasher, { mode: 'pseudonymize' })).toBeNull()
+      expect(obj.em).toBe(em)
+    }
   })
 
   /**

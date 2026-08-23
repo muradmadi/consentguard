@@ -147,11 +147,33 @@ describe('scrubPayload report', () => {
     expect(result.payload.note).toBe('no digits at all')
   })
 
-  it('does not record a hash against a non-string value', () => {
+  /**
+   * A numeric `user_id` used to pass through untouched with an empty report.
+   * The report was accurate and the identifier was in the clear, and rule health
+   * showed the path as never having matched — which reads as a dead rule rather
+   * than as the leak it was. Every vendor whose rule declares this path accepts
+   * the field as a number.
+   */
+  it('hashes a numeric value rather than walking past it', () => {
     const payload = { user_id: 12345 }
     const result = scrub(payload, rule([{ path: 'user_id', action: 'hash' }]))
-    expect(result.report).toEqual([])
-    expect(result.payload.user_id).toBe(12345)
+    expect(result.report).toEqual([
+      { path: 'user_id', action: 'hash', matched: 1, mode: 'pseudonymize' },
+    ])
+    expect(result.payload.user_id).toBe(hasher.pseudonymize('12345'))
+  })
+
+  it('gives a number and its decimal string the same pseudonym', () => {
+    const asNumber = scrub({ user_id: 12345 }, rule([{ path: 'user_id', action: 'hash' }]))
+    const asString = scrub({ user_id: '12345' }, rule([{ path: 'user_id', action: 'hash' }]))
+    expect(asNumber.payload.user_id).toBe(asString.payload.user_id)
+  })
+
+  it('does not record a hash against a value that is not a scalar', () => {
+    for (const user_id of [true, { id: 1 }, [1, 2], null]) {
+      const result = scrub({ user_id }, rule([{ path: 'user_id', action: 'hash' }]))
+      expect(result.report, `hashed ${JSON.stringify(user_id)}`).toEqual([])
+    }
   })
 
   it('never records the value it removed', () => {

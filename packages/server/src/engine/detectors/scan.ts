@@ -47,16 +47,33 @@ function walk(
     const value = container[key]
     const path = prefix ? `${prefix}.${key}` : String(key)
 
-    if (typeof value === 'string') {
+    if (typeof value === 'string' || typeof value === 'number') {
       inspect(container, key, path, active, report, hasher)
     } else if (value && typeof value === 'object') {
       walk(value, path, active, report, hasher)
     }
-    // Numbers are left alone deliberately: every detector here requires
-    // punctuation or an issuer prefix, so a bare number is an id, not PII.
   }
 }
 
+/**
+ * Run the detectors against one value, which may be a number.
+ *
+ * Numbers used to be skipped, on the reasoning that every detector needs
+ * punctuation or an issuer prefix so a bare digit run is an id. That is true of
+ * five of the six: email and both IP forms need separators, phone needs a
+ * leading `+` or real separators, and an SSN needs its hyphens. None of them can
+ * fire on a number even when it is spelled out.
+ *
+ * `credit_card` is the exception, and the one that matters. Its pattern matches
+ * a bare run of digits behind an issuer prefix and a Luhn check, and a 16-digit
+ * card is a safe JSON integer — so `{"pan": 4111111111111111}` round-tripped
+ * intact while the same value in quotes was removed. Protection is not supposed
+ * to depend on which JSON type a vendor's SDK happened to use.
+ *
+ * Luhn plus the issuer prefix is what keeps this off ordinary ids: millisecond
+ * and microsecond timestamps cannot match at all, because no issuer prefix
+ * begins with `1`, and neither can anything shorter than thirteen digits.
+ */
 function inspect(
   container: any,
   key: string | number,
@@ -66,7 +83,10 @@ function inspect(
   hasher: Hasher,
 ): void {
   for (const detector of active) {
-    const value = container[key]
+    const raw = container[key]
+    // Re-read per detector: an earlier one may have replaced the value, and a
+    // whole-value action returns below rather than falling through to here.
+    const value = typeof raw === 'number' ? numericText(raw) : raw
     if (typeof value !== 'string' || value === '') return
 
     detector.pattern.lastIndex = 0
@@ -123,4 +143,16 @@ function replaceWholeValue(
 
   container[key] = PLACEHOLDER
   return { action: 'redact' }
+}
+
+/**
+ * A number as the text a detector sees, or null when there is nothing to match.
+ *
+ * Exponential notation (`1e21`) and a non-finite value carry no identifier and
+ * would only give a pattern a shape to trip over, so neither is scanned.
+ */
+function numericText(value: number): string | null {
+  if (!Number.isFinite(value)) return null
+  const text = String(value)
+  return text.includes('e') || text.includes('E') ? null : text
 }

@@ -158,3 +158,48 @@ describe('scanPayload detectors', () => {
     expect(JSON.stringify(report)).not.toContain('alice@example.com')
   })
 })
+
+/**
+ * Five of the six detectors cannot fire on a number whatever we do, because
+ * their patterns need punctuation. `credit_card` can, and a 16-digit card is a
+ * safe JSON integer — so the same value was removed in quotes and forwarded
+ * without them.
+ */
+describe('numeric values', () => {
+  it('removes a card sent as a JSON number, as it does one sent as a string', () => {
+    const asNumber: any = { pan: 4111111111111111 }
+    const asString: any = { pan: '4111111111111111' }
+
+    expect(scanPayload(asNumber, ALL, hasher)).toEqual([
+      { path: 'pan', action: 'strip', matched: 1, detector: 'credit_card' },
+    ])
+    expect(scanPayload(asString, ALL, hasher)).toEqual([
+      { path: 'pan', action: 'strip', matched: 1, detector: 'credit_card' },
+    ])
+    expect('pan' in asNumber).toBe(false)
+    expect('pan' in asString).toBe(false)
+  })
+
+  it('leaves a millisecond timestamp alone, because no issuer prefix starts with 1', () => {
+    const payload: any = { ts: 1755950400000, us: 1755950400000000 }
+    expect(scanPayload(payload, ALL, hasher)).toEqual([])
+    expect(payload).toEqual({ ts: 1755950400000, us: 1755950400000000 })
+  })
+
+  it('leaves ordinary numeric ids alone', () => {
+    const payload: any = { order_id: 40318842, qty: 3, price: 19.99, user_id: 4815162342 }
+    expect(scanPayload(payload, ALL, hasher)).toEqual([])
+    expect(payload).toEqual({ order_id: 40318842, qty: 3, price: 19.99, user_id: 4815162342 })
+  })
+
+  it('does not scan a number it cannot spell out without an exponent', () => {
+    const payload: any = { big: 1e21, nope: Number.POSITIVE_INFINITY }
+    expect(scanPayload(payload, ALL, hasher)).toEqual([])
+  })
+
+  it('still leaves booleans and nulls untouched', () => {
+    const payload: any = { flag: true, nothing: null }
+    expect(scanPayload(payload, ALL, hasher)).toEqual([])
+    expect(payload).toEqual({ flag: true, nothing: null })
+  })
+})

@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'crypto'
 import type { HashMode, NormalizeFormat } from '@sluice/shared'
 import { normalizeForMatchKey } from './normalize'
+import { asScalarText } from './scalar'
 
 /**
  * The two hashes, built once from the secret the app was constructed with.
@@ -65,7 +66,13 @@ export interface HashSpec {
 export type HashOutcome = { action: 'hash'; mode: HashMode } | { action: 'strip' } | null
 
 export const applyHash = (obj: any, head: string, hasher: Hasher, spec: HashSpec): HashOutcome => {
-  if (!obj || typeof obj !== 'object' || typeof obj[head] !== 'string') return null
+  if (!obj || typeof obj !== 'object') return null
+  // A number is hashed as its decimal text rather than skipped. See
+  // `asScalarText`: the string-only gate made protection depend on JSON type,
+  // and `user_id` — the field most likely to be declared for hashing — is the
+  // field most likely to arrive as a number.
+  const value = asScalarText(obj[head])
+  if (value === null) return null
 
   if (spec.mode === 'match_key' && spec.normalize) {
     // Meta's pixel with Advanced Matching turned on hashes `em` and `ph` in the
@@ -73,9 +80,9 @@ export const applyHash = (obj: any, head: string, hasher: Hasher, spec: HashSpec
     // match against. Hashing it a second time produces a well-formed digest of a
     // digest, which matches nobody — the exact silent failure the modes exist to
     // prevent. Nothing changed, so there is no audit entry either.
-    if (isSha256Hex(obj[head])) return null
+    if (isSha256Hex(value)) return null
 
-    const digest = hasher.matchKey(obj[head], spec.normalize)
+    const digest = hasher.matchKey(value, spec.normalize)
     if (digest === null) {
       // Declared a match key, cannot be one. Forwarding it unchanged would leak
       // the value; hashing an empty normalisation would forward a constant.
@@ -86,7 +93,7 @@ export const applyHash = (obj: any, head: string, hasher: Hasher, spec: HashSpec
     return { action: 'hash', mode: 'match_key' }
   }
 
-  obj[head] = hasher.pseudonymize(obj[head])
+  obj[head] = hasher.pseudonymize(value)
   return { action: 'hash', mode: 'pseudonymize' }
 }
 
