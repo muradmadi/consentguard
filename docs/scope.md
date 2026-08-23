@@ -400,20 +400,88 @@ Three things were fixed alongside it:
   with no consent record anywhere, which is an ePrivacy Art. 5(3) problem in a tool whose
   whole point is compliance. The `localStorage` copy survived the user deleting their
   cookies, and Safari caps a cookie set via `document.cookie` at seven days regardless, so
-  the 365-day expiry was fiction there and a real liability everywhere else. The client now
-  keeps a `sessionStorage` identifier that dies with the tab and removes the old persistent
-  one on sight; the server promotes it to an `HttpOnly` first-party cookie only once a
-  consent record exists, and resolves identity from that cookie ahead of anything the page
-  says about itself.
+  the 365-day expiry was fiction there and a real liability everywhere else. The client
+  moved to a `sessionStorage` identifier that died with the tab, and the server promotes an
+  id to an `HttpOnly` first-party cookie only once a consent record exists, resolving
+  identity from that cookie ahead of anything the page says about itself. Item 9 finished
+  the job: the client mints nothing at all now.
 - **`getDefaultRule` failed open.** It returned `category: 'necessary'`, which `hasConsent`
   grants unconditionally — reachable whenever a rule override exists for an id the registry
   does not know and will not parse. It now returns `unknown`, which `hasConsent` refuses as
   unconditionally as it grants `necessary`, so a CMP configured with a purpose by that name
   cannot re-open the branch.
 
-Still open: `sessionStorage` is still storage on a visitor's device before any consent
-record exists. It dies with the tab and is promoted to nothing, but whether the firewall's
-own routing identifier is strictly necessary is a judgement call rather than a settled one.
+Carried out in item 9: the client stopped minting an identifier altogether.
+
+### 9. Stop storing anything before consent — **done**
+
+Item 8 left a `sessionStorage` identifier on the visitor's device before any consent
+record existed. The open question was whether the firewall's own routing identifier is
+strictly necessary under ePrivacy Art. 5(3) — which is technology-neutral, so
+`sessionStorage` was covered by it exactly as a cookie is, and "it is not a cookie" was
+never the defence. There is a real exemption to argue: WP29 Opinion 04/2012 treats storage
+holding a user's consent preferences as exempt, since the alternative is re-asking on every
+page load.
+
+The argument did not survive checking what the identifier did. Consent records are keyed by
+the subject id an external CMP sends over `/webhooks/:provider`. The client minted a random
+UUID. Those never coincide, so on a stock install every request was refused for want of
+consent, `consent._exists` was never true and the cookie was never promoted, and the id's
+entire contribution was naming the audit row of a request that was blocked anyway. It was
+not strictly necessary because it was not sufficient.
+
+So it is gone. Identity comes from `config.userId` — the subject the page's CMP knows — or
+from the server's own `HttpOnly` cookie, and from nowhere else. A visitor whose CMP has not
+spoken reaches the firewall with no identity, is refused, and has nothing written to their
+device. The outcome is what it always was; the storage is not.
+
+One thing was found alongside it. **A request with no identity left no record.** It was
+counted and dropped with a bare `204`, which after this change is the ordinary path for
+every pre-consent visitor rather than an edge case — the same defect item 10 closed for an
+unknown destination. It is now audited as `no_identity` against a constant `(anonymous)`
+subject. The subject is a constant deliberately: deriving one from the request would be the
+server minting the identifier the client just stopped minting.
+
+Still open: the wiring this exposed. `docs/install.md` lists `userId` as an option to "pin
+the identifier", when it is in fact what makes the consent gate function at all. A stock
+install forwards nothing and does not say why.
+
+### 10. Say what happened to a request nobody can serve — **done**
+
+`/ingest` refused a destination no rule describes with a bare `400`, writing no audit
+record and no metric — the one decision on the path that left nothing behind, against an
+invariant that says every decision is appended to a durable sink. The case that matters is
+not a mistyped path but a browser still running a bundle from before a registry change,
+whose beacons are dropped by a firewall that cannot say it dropped them. It is now audited
+as `unknown_destination`. The status stays `400` rather than the opaque `204`: this is an
+integration mistake, and the developer making it benefits from being told.
+
+`ClientConfig.domains` went with it. It mapped an arbitrary host to the destination id
+`unknown`, which no rule describes, so every request it produced was refused and discarded
+— a documented option whose only effect was to drop the traffic it was asked to protect.
+Extending coverage means a destination rule; blocking a host by name is not something this
+firewall claims to do.
+
+### 11. Scrub a value that arrived as a number — **done**
+
+Three of the four transformation primitives gated on `typeof value === 'string'`, so the
+firewall's protection depended on a payload's JSON types — a boundary no vendor treats as
+one. A declared `hash` on a numeric `user_id` did nothing and wrote no audit entry, and
+`ga4`, `amplitude` and `mixpanel` all declare that path while all three vendors accept the
+field as a number. The record was honest and the reading it invited was wrong: rule health
+showed `matched: 0`, which reads as a dead path rather than as an identifier leaving in the
+clear.
+
+`asScalarText` now states the rule once. A number is transformed as its decimal text; a
+boolean is not an identifier, and an object or array is a rule pointing at a container
+rather than a field, which stays visible as `matched: 0` instead of being quietly hashed.
+
+The value scan reads numbers too, and the reason it is safe is narrow: five of the six
+detectors need punctuation and cannot fire on a digit run at all. `credit_card` can, and a
+16-digit card is a safe JSON integer — so `{"pan": 4111111111111111}` round-tripped intact
+while the same value in quotes was stripped. Luhn plus an issuer prefix is what keeps it
+off ordinary ids; no prefix begins with `1`, so a millisecond or microsecond timestamp
+cannot match however its check digits fall.
 
 ## Non-goals
 

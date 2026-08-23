@@ -33,6 +33,17 @@ import { supportFor, withSupport } from './destinations/support'
  */
 const IDENTITY_COOKIE = 'cuid'
 
+/**
+ * The subject an audit record names when the request carried no identity.
+ *
+ * A refusal is evidence, and this branch used to produce none — a request with
+ * nobody to attribute it to was counted and dropped silently. The record needs a
+ * subject, and inventing one here would be the server minting the identifier the
+ * client deliberately stopped minting. The parentheses keep it from reading as,
+ * or colliding with, a real id.
+ */
+const ANONYMOUS_SUBJECT = '(anonymous)'
+
 export interface AppOptions {
   /**
    * Where the durable audit record is written. Passed in rather than built
@@ -336,8 +347,18 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
       c.req.query('cuid') ||
       c.req.query('sluice_user_id')
 
+    // No identity means no consent record can be found, so there is nothing to
+    // check and the request is refused. That is the ordinary state for a visitor
+    // whose CMP has not spoken: the client mints no identifier of its own, and
+    // the server's cookie exists only once consent does.
     if (!userId) {
       metrics.recordRequest(destination, 'blocked')
+      await auditLogger.log({
+        userId: ANONYMOUS_SUBJECT,
+        destination,
+        decision: 'blocked',
+        reason: 'no_identity',
+      })
       return c.body(null, 204)
     }
 

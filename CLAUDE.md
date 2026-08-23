@@ -62,9 +62,12 @@ Five workspace packages under `packages/`, built by turbo, orchestrated by `just
    An empty allowlist is permissive; that is a dev-only default. A non-empty one
    requires the header: a request that will not say where it is from is not on the list.
 2. **Identity** — the `cuid` cookie first, then the `X-Consent-UserId` header, then
-   `?cuid=`, then `?sluice_user_id=`. No identity → `204`. The cookie outranks the rest
-   because only this server writes it, and only after consent (step 5a); everything else
-   is a session identifier the page minted for itself.
+   `?cuid=`, then `?sluice_user_id=`. No identity → `204`, audited as `no_identity`
+   against a constant `(anonymous)` subject. The cookie outranks the rest because only
+   this server writes it, and only after consent (step 5a); everything else is the page
+   naming a subject its CMP knows. Nothing mints an identifier — not the client, and not
+   this branch. A visitor whose CMP has not spoken has no identity here, and that is the
+   ordinary state rather than an error.
 3. **Destination known?** — `RuleManager.isSupported`. Unknown → `400`.
 4. **Body read once**, capped at `SLUICE_MAX_BODY_BYTES` (64 KiB default), into
    `rawBody` + `jsonBody` (vendors like GA4 send form-encoded). Over the cap → `413`.
@@ -307,11 +310,12 @@ Real, verified, and unfixed. Do not re-diagnose these from scratch:
   requirement, and the mutation observer covers `<img>` and `<script>` the parser appends
   below the tag. There is deliberately no document-ready sweep: by then the requests have
   gone, so a sweep would duplicate the event rather than prevent the leak.
-- **A session identifier is still stored before consent.** The client writes one
-  `sessionStorage` entry on page load; it dies with the tab and is never promoted to
-  anything persistent until a consent record exists, but it is still storage on a
-  visitor's device. Whether the firewall's own routing identifier is strictly necessary
-  is a judgement call, not a settled one.
+- **The consent gate needs `userId` pinned to the CMP's subject id.** Consent records
+  are keyed by whatever id the CMP sends over `/webhooks/:provider`, so a page that pins
+  no `userId` has no identity, and every request is refused as `no_identity`. That is
+  fail-closed and correct, but it means the out-of-the-box configuration forwards
+  nothing, and `docs/install.md` describes `userId` as an option rather than as the wire
+  that makes the gate work.
 - **Three destinations have no adapter.** Amplitude and TikTok do not need one — both
   send readable JSON to the endpoint the browser targeted, which is what `passthrough`
   means. Hotjar does: its payload is a recording envelope, so it is `unsupported` and

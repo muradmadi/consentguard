@@ -52,14 +52,14 @@ The bundle reads its configuration from a meta tag or from `window.__sluiceConfi
 <meta name="sluice-config" content='{"proxyPath":"/analytics"}' />
 ```
 
-| Option                    | Default      | Meaning                                                                    |
-| ------------------------- | ------------ | -------------------------------------------------------------------------- |
-| `proxyUrl`                | —            | Absolute proxy URL. Overrides `proxyPath`.                                 |
-| `proxyPath`               | `/analytics` | Path where the proxy is mounted on the app's own origin.                   |
-| `destinations`            | built-in     | Extra `host[/pathPrefix]` → destination id entries, merged with the table. |
-| `userId`                  | —            | Pin the identifier instead of using the per-session one.                   |
-| `observeMutations`        | `true`       | Watch the DOM for injected tracker scripts and parser-inserted pixels.     |
-| `dangerouslyAllowOnError` | `false`      | Send directly to the vendor if the proxy is unreachable. Leave it off.     |
+| Option                    | Default      | Meaning                                                                             |
+| ------------------------- | ------------ | ----------------------------------------------------------------------------------- |
+| `proxyUrl`                | —            | Absolute proxy URL. Overrides `proxyPath`.                                          |
+| `proxyPath`               | `/analytics` | Path where the proxy is mounted on the app's own origin.                            |
+| `destinations`            | built-in     | Extra `host[/pathPrefix]` → destination id entries, merged with the table.          |
+| `userId`                  | —            | The subject id your CMP uses. Without it there is no identity and nothing forwards. |
+| `observeMutations`        | `true`       | Watch the DOM for injected tracker scripts and parser-inserted pixels.              |
+| `dangerouslyAllowOnError` | `false`      | Send directly to the vendor if the proxy is unreachable. Leave it off.              |
 
 A pattern matches a host and its subdomains, with an optional path prefix that
 has to match whole segments: `facebook.com/tr` covers `www.facebook.com/tr` but

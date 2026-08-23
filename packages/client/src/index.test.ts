@@ -77,8 +77,9 @@ describe('public API', () => {
     await loadClient()
     const sluice = (window as any).Sluice
     expect(sluice).toBeDefined()
-    expect(typeof sluice.userId).toBe('string')
-    expect(sluice.userId.length).toBeGreaterThan(0)
+    // Null is the ordinary state. The page pinned no id, and the server's
+    // cookie is HttpOnly, so there is nothing here for the page to read.
+    expect(sluice.userId).toBeNull()
     expect(sluice.proxyBase).toBe(`${window.location.origin}/analytics`)
   })
 
@@ -106,17 +107,25 @@ describe('public API', () => {
   /**
    * The identifier is the one thing this bundle stores, and storing a
    * persistent one before a consent record exists is the ePrivacy Art. 5(3)
-   * problem this tool exists to prevent. It lasts a session; making it last
-   * longer is the server's call, after consent.
+   * problem this tool exists to prevent — and Art. 5(3) is technology-neutral,
+   * so a `sessionStorage` id was covered by it exactly as a cookie is. The
+   * exemption it would have needed is "strictly necessary", which a minted
+   * identifier could not meet: consent records are keyed by the subject id an
+   * external CMP sends, so a UUID this bundle invented matched none of them.
+   * Identity is pinned by the page or set by the server after consent, and
+   * minted here never.
    */
-  it('keeps the user id for the session and reuses it', async () => {
+  it('mints no identifier of its own', async () => {
     await loadClient()
-    const first = (window as any).Sluice.userId
-    expect(sessionStorage.getItem('sluice_session_id')).toBe(first)
+    expect((window as any).Sluice.userId).toBeNull()
+    expect(sessionStorage.getItem('sluice_session_id')).toBeNull()
+    expect(localStorage.getItem('sluice_user_id')).toBeNull()
+  })
 
-    delete (window as any).Sluice
+  it('clears a session id an earlier version left behind', async () => {
+    sessionStorage.setItem('sluice_session_id', 'minted-before-consent')
     await loadClient()
-    expect((window as any).Sluice.userId).toBe(first)
+    expect(sessionStorage.getItem('sluice_session_id')).toBeNull()
   })
 
   it('writes no persistent identifier before consent exists', async () => {
@@ -132,7 +141,7 @@ describe('public API', () => {
     expect((window as any).Sluice.userId).not.toBe('minted-before-consent')
   })
 
-  it('starts a fresh session id rather than failing when storage is blocked', async () => {
+  it('does not throw when storage is blocked and there is nothing to clear', async () => {
     const blocked = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('storage blocked')
     })
@@ -144,8 +153,7 @@ describe('public API', () => {
     })
 
     await loadClient()
-    expect(typeof (window as any).Sluice.userId).toBe('string')
-    expect((window as any).Sluice.userId.length).toBeGreaterThan(0)
+    expect((window as any).Sluice.userId).toBeNull()
     blocked.mockRestore()
     vi.restoreAllMocks()
   })
@@ -183,7 +191,9 @@ describe('fetch interception', () => {
 
     const headers = new Headers(init!.headers)
     expect(headers.get('X-Original-Url')).toBe(TRACKER)
-    expect(headers.get('X-Consent-UserId')).toBe((window as any).Sluice.userId)
+    // Absent, not empty: the page has no identity to speak for, and the server's
+    // cookie travels on `credentials: 'include'` without this code seeing it.
+    expect(headers.has('X-Consent-UserId')).toBe(false)
     expect(init!.credentials).toBe('include')
   })
 
@@ -256,7 +266,7 @@ describe('sendBeacon interception', () => {
     expect(underlying).toHaveBeenCalledWith(NEUTRAL, 'payload')
   })
 
-  it('reroutes tracking beacons with cuid and original url', async () => {
+  it('reroutes tracking beacons with the original url, and no invented cuid', async () => {
     const underlying = stubBeacon()
     await loadClient()
 
@@ -264,8 +274,18 @@ describe('sendBeacon interception', () => {
 
     const sent = new URL(underlying.mock.calls.at(-1)![0] as string)
     expect(sent.pathname).toBe('/analytics/ingest/ga4')
-    expect(sent.searchParams.get('cuid')).toBe((window as any).Sluice.userId)
+    expect(sent.searchParams.has('cuid')).toBe(false)
     expect(sent.searchParams.get('original')).toBe(TRACKER)
+  })
+
+  it('carries a pinned id in the query string, since a beacon has no headers', async () => {
+    const underlying = stubBeacon()
+    await loadClient({ userId: 'cmp-subject-123' })
+
+    navigator.sendBeacon(TRACKER, 'payload')
+
+    const sent = new URL(underlying.mock.calls.at(-1)![0] as string)
+    expect(sent.searchParams.get('cuid')).toBe('cmp-subject-123')
   })
 })
 
@@ -317,14 +337,14 @@ describe('script neutralisation', () => {
 describe('<img> pixel interception', () => {
   const PIXEL = 'https://www.facebook.com/tr/?id=1&ev=Purchase&ud%5Bem%5D=alice%40example.com'
 
-  it('reroutes a tracking image with cuid and original url', async () => {
+  it('reroutes a tracking image with the original url, and no invented cuid', async () => {
     await loadClient()
     const img = new Image()
     img.src = PIXEL
 
     const sent = new URL(img.src)
     expect(sent.pathname).toBe('/analytics/ingest/facebook_pixel')
-    expect(sent.searchParams.get('cuid')).toBe((window as any).Sluice.userId)
+    expect(sent.searchParams.has('cuid')).toBe(false)
     expect(sent.searchParams.get('original')).toBe(PIXEL)
   })
 

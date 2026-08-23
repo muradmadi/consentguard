@@ -833,6 +833,85 @@ describe('Sluice server', () => {
    * registry change sends beacons under an id the server no longer knows, and
    * those were dropped by a firewall that could not say it had dropped them.
    */
+  /**
+   * Identity is not minted anywhere any more: the client stopped inventing one,
+   * and the server's cookie exists only once consent does. So a request with no
+   * identity is the ordinary state for a visitor whose CMP has not spoken, and
+   * it has to leave a record like every other refusal.
+   */
+  describe('/ingest a request carrying no identity', () => {
+    let upstream: ReturnType<typeof vi.fn>
+    let realFetch: typeof globalThis.fetch
+
+    beforeEach(() => {
+      realFetch = globalThis.fetch
+      upstream = vi.fn(async () => new Response(null, { status: 200 }))
+      globalThis.fetch = upstream as unknown as typeof fetch
+    })
+
+    afterEach(() => {
+      globalThis.fetch = realFetch
+    })
+
+    async function latestAudit(app: ReturnType<typeof createApp>) {
+      const res = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
+      return ((await res.json()) as any).records[0]
+    }
+
+    it('refuses it with the opaque 204 and forwards nothing', async () => {
+      const app = createApp(storage, DEV_ENV)
+
+      const res = await app.request('/ingest/amplitude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events: [{ user_id: 'u1' }] }),
+      })
+
+      expect(res.status).toBe(204)
+      expect(upstream).not.toHaveBeenCalled()
+    })
+
+    it('records the refusal against a subject that identifies nobody', async () => {
+      const app = createApp(storage, DEV_ENV)
+
+      await app.request('/ingest/amplitude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events: [{ user_id: 'u1' }] }),
+      })
+
+      expect(await latestAudit(app)).toMatchObject({
+        userId: '(anonymous)',
+        destination: 'amplitude',
+        decision: 'blocked',
+        reason: 'no_identity',
+      })
+    })
+
+    /**
+     * The subject is a constant, not something derived from the request. A
+     * server that fingerprinted the caller to fill this in would be minting the
+     * identifier the client deliberately stopped minting.
+     */
+    it('gives two different callers the same subject', async () => {
+      const app = createApp(storage, DEV_ENV)
+
+      for (const ua of ['agent-one', 'agent-two']) {
+        await app.request('/ingest/amplitude', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': ua },
+          body: JSON.stringify({ events: [] }),
+        })
+      }
+
+      const res = await app.request('/audit?limit=2', {
+        headers: { Authorization: 'Bearer test-admin' },
+      })
+      const records = ((await res.json()) as any).records
+      expect(records.map((r: any) => r.userId)).toEqual(['(anonymous)', '(anonymous)'])
+    })
+  })
+
   describe('/ingest a destination the registry does not know', () => {
     let upstream: ReturnType<typeof vi.fn>
     let realFetch: typeof globalThis.fetch

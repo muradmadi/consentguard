@@ -43,11 +43,11 @@ const DEFAULTS = {
   dangerouslyAllowOnError: false,
 }
 
-/** Where the session identifier lives. Cleared by the browser with the tab. */
-const SESSION_KEY = 'sluice_session_id'
-
-/** The persistent id earlier versions wrote on page load, removed on sight. */
-const LEGACY_PERSISTENT_KEY = 'sluice_user_id'
+/** Identifiers earlier versions wrote on page load. Both removed on sight. */
+const ABANDONED_KEYS = {
+  local: 'sluice_user_id',
+  session: 'sluice_session_id',
+}
 
 function getConfigFromMeta(): Partial<ClientConfig> {
   if (typeof document === 'undefined') return {}
@@ -75,65 +75,52 @@ function resolveProxyBase(config: ResolvedConfig): string {
 }
 
 /**
- * A per-session identifier, and nothing that outlives the session.
+ * The identity this page can speak for, and nothing minted here.
  *
- * This used to write a 365-day cookie and a `localStorage` entry on page load,
- * before any consent record existed — storing a persistent tracking identifier
- * without consent, which is an ePrivacy Art. 5(3) problem in a tool whose whole
- * point is compliance, and which the `localStorage` copy made survive the user
- * deleting their cookies. It was also fiction on Safari, where a cookie set from
- * `document.cookie` is capped at seven days whatever expiry it names.
+ * The client used to mint an identifier of its own — first a 365-day cookie
+ * plus a `localStorage` entry, then a `sessionStorage` id that died with the
+ * tab. Both were storage on a visitor's device written before any consent
+ * record existed, which ePrivacy Art. 5(3) covers whatever the storage medium
+ * is; the exemption it would need is "strictly necessary", and a minted
+ * identifier could not meet it, because it could not do the job it was stored
+ * for. Consent records are keyed by the subject id an external CMP sends over
+ * the webhook. A random UUID this bundle invented never matches one, so every
+ * request under it was refused for want of consent, the server never promoted
+ * it to a cookie, and the only thing it accomplished was naming the audit row
+ * of a request that was blocked anyway.
  *
- * The identifier now lives in `sessionStorage` and dies with the tab. Making it
- * persistent is the server's decision and only after a consent record exists:
- * it answers with a first-party `Set-Cookie`, which the browser then sends on
- * every proxied request ahead of anything the page says about itself.
+ * So identity now comes from one of two places, and neither is invented here:
+ * `config.userId`, which the page pins to the subject its CMP knows, or the
+ * server's own `HttpOnly` cookie, which it sets after consent exists and the
+ * browser then sends on its own without this code seeing it. Absent both, the
+ * request carries no identity and the firewall refuses it — which is the same
+ * outcome a minted id produced, without the storage.
  */
-function getSessionUserId(config: ResolvedConfig): string {
+function resolveUserId(config: ResolvedConfig): string | null {
   if (config.userId) return config.userId
-  if (typeof window === 'undefined') return 'server'
+  if (typeof window === 'undefined') return null
 
-  forgetLegacyPersistentId()
-
-  const existing = readSession()
-  if (existing) return existing
-
-  const id =
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : 'u_' + Math.random().toString(36).substring(2, 15)
-
-  writeSession(id)
-  return id
+  forgetAbandonedIds()
+  return null
 }
 
 /**
- * Storage access throws outright when a browser is set to block site data, so
- * every read and write here is guarded. A visitor who blocks storage gets a new
- * identifier per page and no complaint, which is the correct outcome.
+ * Clear what earlier versions left on the device.
+ *
+ * A visitor who met an older bundle is still carrying its identifier; removing
+ * it is the only chance this code has to undo that. Storage access throws
+ * outright when a browser is set to block site data, so both are guarded.
  */
-function readSession(): string | null {
+function forgetAbandonedIds(): void {
   try {
-    return sessionStorage.getItem(SESSION_KEY)
-  } catch {
-    return null
-  }
-}
-
-function writeSession(id: string): void {
-  try {
-    sessionStorage.setItem(SESSION_KEY, id)
-  } catch {
-    // Nothing to do: the id is still used for this page load.
-  }
-}
-
-/** An identifier stored without consent is not one to keep once we know better. */
-function forgetLegacyPersistentId(): void {
-  try {
-    localStorage.removeItem(LEGACY_PERSISTENT_KEY)
+    localStorage.removeItem(ABANDONED_KEYS.local)
   } catch {
     // Blocked storage holds nothing to remove.
+  }
+  try {
+    sessionStorage.removeItem(ABANDONED_KEYS.session)
+  } catch {
+    // Same.
   }
 }
 
@@ -156,14 +143,14 @@ export function init(config?: Partial<ClientConfig>) {
   // firewall claims to do.
   const activeDestinations = { ...resolved.destinations }
 
-  const userId = getSessionUserId(resolved)
+  const userId = resolveUserId(resolved)
   const proxyBase = resolveProxyBase(resolved)
   const ingestBase = `${proxyBase}/ingest`
 
-  // Expose the resolved identity for debugging. This is the session id the
-  // page minted; once consent has promoted one, the server's HttpOnly cookie
-  // outranks it and the page cannot read that. No secrets, and nothing
-  // writable: a page cannot assert its own consent.
+  // Expose the resolved identity for debugging. `null` is the ordinary state:
+  // it means this page pinned no `userId`, so identity rides on the server's
+  // HttpOnly cookie if consent has produced one, and the page cannot read that.
+  // No secrets, and nothing writable: a page cannot assert its own consent.
   ;(window as any).Sluice = { userId, proxyBase }
 
   // If proxy returns 403, stop rerouting for the remainder of the session
@@ -185,7 +172,10 @@ export function init(config?: Partial<ClientConfig>) {
     const destination = !stopRerouting ? matchDestination(url, activeDestinations) : null
     if (!destination) return null
     const proxied = new URL(proxyUrlFor(destination))
-    proxied.searchParams.set('cuid', userId)
+    // Omitted rather than sent empty when the page has no identity to speak
+    // for. A blank `cuid` is a value the server would have to special-case;
+    // an absent one already means what it should.
+    if (userId) proxied.searchParams.set('cuid', userId)
     proxied.searchParams.set('original', url)
     return proxied.toString()
   }
@@ -210,7 +200,7 @@ export function init(config?: Partial<ClientConfig>) {
     }
 
     const headers = new Headers(initOpts?.headers)
-    headers.set('X-Consent-UserId', userId)
+    if (userId) headers.set('X-Consent-UserId', userId)
     headers.set('X-Original-Url', url)
 
     try {
@@ -267,7 +257,7 @@ export function init(config?: Partial<ClientConfig>) {
     }
 
     try {
-      this.setRequestHeader('X-Consent-UserId', userId)
+      if (userId) this.setRequestHeader('X-Consent-UserId', userId)
       if (this._sluiceOriginalUrl) this.setRequestHeader('X-Original-Url', this._sluiceOriginalUrl)
 
       const shim = () => {
@@ -463,7 +453,8 @@ declare global {
   }
   interface Window {
     Sluice?: {
-      userId: string
+      /** Null unless the page pinned one; the server's cookie is not readable here. */
+      userId: string | null
       proxyBase: string
     }
     __sluiceConfig?: Partial<ClientConfig>
