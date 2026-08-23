@@ -21,50 +21,63 @@ export const ga4Adapter: VendorAdapter = {
       return { skip: true, reason: 'GA4_MEASUREMENT_ID or GA4_API_SECRET not configured' }
     }
 
-    // gtag beacons put event data in the original URL's query string.
-    // Fall back to the request's own query if the original URL header is missing.
-    let params: URLSearchParams
+    // gtag beacons put the hit's shared context in the query string: client id,
+    // session, language, and the page. Fall back to the request's own query when
+    // the original URL header is missing.
+    let shared: URLSearchParams
     try {
-      params = new URL(ctx.originalUrl).searchParams
+      shared = new URL(ctx.originalUrl).searchParams
     } catch {
-      params = new URLSearchParams(ctx.query)
+      shared = new URLSearchParams(ctx.query)
     }
 
-    // Some SDK versions POST the payload as application/x-www-form-urlencoded
-    // in the body. Merge those in, but let query-string values win.
+    // Some SDK versions POST the hit form-encoded instead, and once more than
+    // one event is queued gtag batches them: shared context stays in the query
+    // string and the body carries one event per CRLF-separated line.
+    //
+    // The lines used to be handed to `URLSearchParams` whole. Splitting on `&`
+    // then ran straight through the line breaks, so a three-event batch became
+    // one event wearing the others' parameters — a page_view carrying a
+    // purchase's value and a `dl` with a literal newline in it. That is not lost
+    // data, it is invented data, which is worse in a tool whose product is that
+    // its reporting is derived from what actually happened.
     const contentType = ctx.headers['content-type'] || ''
-    if (ctx.rawBody && contentType.includes('application/x-www-form-urlencoded')) {
-      new URLSearchParams(ctx.rawBody).forEach((value, key) => {
-        if (!params.has(key)) params.set(key, value)
-      })
-    }
+    const lines =
+      ctx.rawBody && contentType.includes('application/x-www-form-urlencoded')
+        ? ctx.rawBody
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+        : []
 
-    const clientId = params.get('cid') || params.get('_p') || 'unknown'
-    const eventName = params.get('en') || 'page_view'
-
-    const eventParams: Record<string, any> = {}
-    params.forEach((value, key) => {
-      if (key.startsWith('ep.')) {
-        eventParams[key.slice(3)] = value
-      } else if (key.startsWith('epn.')) {
-        const n = Number(value)
-        if (!Number.isNaN(n)) eventParams[key.slice(4)] = n
+    // A single hit is one event whose parameters may be split across the query
+    // and the body, so the two are merged with the query winning. A batch keeps
+    // each line separate, because that separation is what identifies the events.
+    let eventSources: URLSearchParams[]
+    if (lines.length > 1) {
+      eventSources = lines.map((line) => new URLSearchParams(line))
+    } else {
+      if (lines.length === 1) {
+        new URLSearchParams(lines[0]).forEach((value, key) => {
+          if (!shared.has(key)) shared.set(key, value)
+        })
       }
-    })
-
-    // Preserve a handful of standard GA4 params that aren't event-scoped.
-    const passthroughKeys = ['dl', 'dt', 'dr', 'ul', 'sr']
-    for (const k of passthroughKeys) {
-      const v = params.get(k)
-      if (v !== null && !(k in eventParams)) eventParams[k] = v
+      eventSources = [shared]
     }
+
+    const clientId = shared.get('cid') || shared.get('_p') || 'unknown'
+
+    // Measurement Protocol accepts at most 25 events per request and rejects the
+    // whole call over that, so a cap keeps most of a batch rather than none of
+    // it. gtag does not queue anything approaching this.
+    const MAX_EVENTS = 25
 
     let mpPayload: any = {
       client_id: clientId,
-      events: [{ name: eventName, params: eventParams }],
+      events: eventSources.slice(0, MAX_EVENTS).map((source) => buildEvent(source, shared)),
     }
 
-    const userId = params.get('uid')
+    const userId = shared.get('uid')
     if (userId) mpPayload.user_id = userId
 
     // Apply declarative rule transformations against the MP-shaped payload, then
@@ -88,4 +101,41 @@ export const ga4Adapter: VendorAdapter = {
       report: scrub.report,
     }
   },
+}
+
+/**
+ * One Measurement Protocol event from one set of gtag parameters.
+ *
+ * gtag prefixes a string event parameter `ep.` and a numeric one `epn.`, so
+ * everything a site passes to `gtag('event', name, {...})` arrives under one of
+ * those — which is why an application's own fields, an address included, turn up
+ * here rather than anywhere a vendor named.
+ *
+ * The five unprefixed keys below are the only context that survives. That makes
+ * this an allowlist rather than a blocklist: a parameter nobody has considered
+ * is dropped instead of forwarded, so `up.` user properties, session counters
+ * and client hints never reach the vendor at all. It is the reason most of what
+ * `ga4.verify.test.ts` asserts holds for fields no rule mentions.
+ */
+function buildEvent(source: URLSearchParams, shared: URLSearchParams) {
+  const params: Record<string, any> = {}
+
+  source.forEach((value, key) => {
+    if (key.startsWith('ep.')) {
+      params[key.slice(3)] = value
+    } else if (key.startsWith('epn.')) {
+      const n = Number(value)
+      if (!Number.isNaN(n)) params[key.slice(4)] = n
+    }
+  })
+
+  // Page and locale context, taken from the event's own line first so a batch
+  // whose events span pages keeps each one's URL, then from the shared hit.
+  for (const key of ['dl', 'dt', 'dr', 'ul', 'sr']) {
+    if (key in params) continue
+    const value = source.get(key) ?? shared.get(key)
+    if (value !== null && value !== undefined) params[key] = value
+  }
+
+  return { name: source.get('en') || shared.get('en') || 'page_view', params }
 }

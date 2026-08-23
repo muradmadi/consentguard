@@ -157,6 +157,11 @@ normalize.ts`), then unsalted SHA-256 — and is allowed only where a rule decla
 - **Vendor adapters** — `destinations/adapters/<vendor>.ts`, registered in `adapters/index.ts`.
   Needed when the vendor's server-side API differs in shape from what the browser sent, and
   the only way to serve an `opaque` transport at all. GA4, Meta CAPI, and Mixpanel have one.
+  An adapter is an **allowlist**: GA4's copies `ep.`/`epn.` event parameters and five named
+  context keys into the Measurement Protocol payload and drops everything else, so `up.`
+  user properties, session counters and client hints never reach the vendor at all. That is
+  a positive-security model and most of what `ga4.verify.test.ts` asserts depends on it, so
+  widening it is a privacy decision rather than a data-coverage one.
 - **Interception patterns** — `packages/client/src/patterns.ts` maps `host[/pathPrefix]` to a
   destination id, and exports the `matchDestination` both halves use. Matching parses the URL
   and reads the host under the same subdomain rule as `engine/egress.ts`; a path prefix has to
@@ -320,6 +325,16 @@ Real, verified, and unfixed. Do not re-diagnose these from scratch:
   send readable JSON to the endpoint the browser targeted, which is what `passthrough`
   means. Hotjar does: its payload is a recording envelope, so it is `unsupported` and
   refused at `/ingest` until somebody writes one that can read it.
+- **Only GA4 is verified against the beacons its vendor actually sends.**
+  `adapters/ga4.fixtures.ts` writes out the `/g/collect` wire format and
+  `ga4.verify.test.ts` asserts the product's own sentence end to end for it: no email,
+  phone, IP or card survives, the allowlist holds, the visitor's address never reaches
+  Google because the forward is made server-side, and every declared path either fires
+  against a fixture or is named in a `DEFENSIVE` list with a reason. The fixtures are the
+  documented wire format written out, not captures from a live browser — a weaker claim
+  than a recording, and stated as such in the file. The other five destinations are
+  protected by the value scan, which is vendor-independent, but their declared paths have
+  not been checked against anything.
 - **Rule health only covers destinations the registry knows.** `/api/rule-health` joins
   the audit against `RuleManager.getAllRules()`, which iterates `REGISTRY_KEYS`. An
   override for an id the registry lacks gets no health row, because `StorageProvider`

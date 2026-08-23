@@ -40,10 +40,10 @@ export function getDefaultRule(id: string): DestinationRule {
     // `hasConsent`. A payload nobody declared a transport for is not one we can
     // claim to have scrubbed, so it is not one we forward.
     transport: 'opaque',
-    transformations: [
-      { path: 'email', action: 'strip' },
-      { path: 'user_id', action: 'hash' },
-      { path: 'ip', action: 'strip' },
-    ],
+    // Deliberately empty. `supportFor` reads the `opaque` transport above and
+    // refuses the request before anything is scrubbed, so a transformation here
+    // could never run. Three used to be listed — email, user_id, ip — which read
+    // as protection that was not there.
+    transformations: [],
   }
 }

@@ -18,13 +18,13 @@ export const tiktok: DestinationRule = {
       action: 'hash',
     },
     {
+      // Stripped, not hashed. `detectors/patterns.ts` states the policy for an
+      // address and this rule used to contradict it: a hash of an IP is still a
+      // stable identifier for a household, and no vendor has a legitimate need
+      // for the raw one. Two destinations disagreeing about what an address is
+      // worth is the inconsistency, not either answer on its own.
       path: 'context.ip',
-      action: 'hash',
-    },
-    {
-      path: 'properties.content_id',
-      action: 'redact',
-      pattern: 'ID-[0-9]+', // Example of redact with pattern
+      action: 'strip',
     },
   ],
 }

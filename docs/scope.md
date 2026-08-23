@@ -483,6 +483,68 @@ while the same value in quotes was stripped. Luhn plus an issuer prefix is what 
 off ordinary ids; no prefix begins with `1`, so a millisecond or microsecond timestamp
 cannot match however its check digits fall.
 
+### 12. Verify one destination properly — **done**
+
+Every slice before this improved a mechanism. None of them established that the mechanism
+protects any particular vendor: Amplitude's and TikTok's paths were written from vendor
+documentation, and nothing asserted that a declared path exists in a payload the vendor
+really sends. `/api/rule-health` was built to answer exactly that and had never been
+pointed at traffic. That is the difference between "the firewall works" and "the firewall
+protects these six vendors", and only the second one is a claim.
+
+Rather than cut the registry to GA4, the verification effort was cut to GA4. Deleting a
+destination also deletes its interception pattern, so a deleted vendor's beacons stop being
+intercepted and go out unscrubbed — strictly worse, and already settled in item 6. And the
+value scan is vendor-independent: email, phone, address and card are caught by shape in any
+JSON payload whatever the declared paths say, so the other five are not unprotected, their
+precision layer is unproven.
+
+`adapters/ga4.fixtures.ts` writes out the `/g/collect` wire format parameter by parameter,
+and `ga4.verify.test.ts` asserts the sentence end to end against it: nothing reaching Google
+carries an email, a phone number, an address or a card, across every fixture. Three things
+came out of it.
+
+- **The adapter is an allowlist, and nobody had said so.** Only `ep.`/`epn.` event
+  parameters and five named context keys are copied into the Measurement Protocol payload.
+  Everything else gtag sends — `up.` user properties, session counters, client hints — is
+  dropped. A site putting an address in `user_properties` sends it on every single hit, and
+  the allowlist closes that for fields nobody thought to declare as much as for the ones
+  they did. It is the strongest privacy property this destination has and it was implicit
+  in a loop.
+- **The visitor's address never reaches Google, by construction.** The Measurement Protocol
+  call is made by the proxy, so the connection Google sees is the deployment's. The only
+  way the visitor's could travel is `uip`, which the adapter never sets. True before this
+  change, asserted only after it.
+- **A batched hit was being turned into an event that never happened.** gtag queues events
+  and posts them as CRLF-separated lines with the shared context left in the query string.
+  The body was handed to `URLSearchParams` whole, so splitting on `&` ran through the line
+  breaks and merged three events into one: a `page_view` carrying a purchase's value and a
+  `dl` with a literal newline in it. No personal data escaped — the email still met the
+  rule — but the vendor was sent a fabricated event, which in a tool whose product is that
+  its reporting is derived from what occurred is the same defect as an audit built from a
+  rule's declarations. Events are now parsed one per line, each keeping its own page.
+
+Two declared paths could not be made to fire. `events.*.params.ip` now does, against a
+beacon carrying `ep.ip`. `events.*.params.uip` does not: reaching it needs a site to name an
+event parameter `uip`, which gtag does not do on its own. It is kept and named in a
+`DEFENSIVE` list with its reason, and the suite asserts that list holds nothing the rule has
+stopped declaring and nothing that does in fact fire — so it cannot become a place to hide a
+dead rule. Padding the fixtures with a beacon nobody sends would have made the suite pass
+while proving nothing.
+
+Two placeholders went at the same time, defects at any scope. `tiktok.ts` declared
+`properties.content_id` → redact `ID-[0-9]+`, commented "Example of redact with pattern" —
+demo scaffolding in a live rule — and hashed `context.ip`, contradicting the policy stated
+in `detectors/patterns.ts` that an address is stripped because a hash of one is still a
+stable household identifier. And `getDefaultRule` declared three transformations behind an
+`opaque` transport that the support gate refuses before anything is scrubbed, so none of
+them could ever run.
+
+Still open: the fixtures are the documented wire format written out, not captures from a
+live browser, so they verify the rule and the adapter against the format rather than against
+a recording. Replacing them with real captures is a strict improvement and needs no other
+change. And the other five destinations remain unverified.
+
 ## Non-goals
 
 Restated from `CLAUDE.md` because this is where they get argued with: no consent UI,
