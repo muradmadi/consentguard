@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises'
+import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { AuditRecord, SealedAuditRecord } from '@sluice/shared'
@@ -258,5 +258,81 @@ describe('FileAuditSink', () => {
     expect(next.prevHash).toBe(first.hash)
     expect(sink.healthy()).toBe(true)
     expect((await sink.verify()).status).toBe('intact')
+  })
+
+  /**
+   * Appends are serialised in-process, which makes this sink correct for one
+   * writer and says nothing about a second. Two containers on one mounted
+   * volume each seal against their own head, claim the same sequence numbers,
+   * and interleave into a chain that does not verify — silently, until somebody
+   * happened to run `sluice verify`.
+   *
+   * The segment being appended to is now checked against the size this process
+   * left it at, so the second writer is caught at the moment it appears and the
+   * sink goes unhealthy, which the evidence gate turns into a refusal to
+   * forward. `appendFile` from another process is the exact shape of the real
+   * failure, so that is what these use.
+   */
+  describe('a second writer in the same directory', () => {
+    it('refuses to append on top of a line it did not write', async () => {
+      const sink = new FileAuditSink({ dir, retentionDays: 90 })
+      await write(sink)
+
+      // Another process appends its own record, sealed against its own head.
+      await appendFile(todaysSegment(), `${JSON.stringify(sealRecord(record(), null))}\n`)
+
+      await expect(write(sink)).rejects.toThrow(/changed underneath this process/)
+    })
+
+    it('goes unhealthy, so the evidence gate stops the firewall', async () => {
+      const sink = new FileAuditSink({ dir, retentionDays: 90 })
+      await write(sink)
+      await appendFile(todaysSegment(), `${JSON.stringify(sealRecord(record(), null))}\n`)
+
+      await expect(write(sink)).rejects.toThrow()
+      expect(sink.healthy()).toBe(false)
+      expect((await sink.status()).lastError).toMatch(/Another writer/)
+    })
+
+    it('catches a hand-edited segment as readily as another process', async () => {
+      const sink = new FileAuditSink({ dir, retentionDays: 90 })
+      await write(sink)
+
+      // Truncating is the shape of somebody removing a record they disliked.
+      await writeFile(todaysSegment(), '')
+
+      await expect(write(sink)).rejects.toThrow(/changed underneath this process/)
+      expect(sink.healthy()).toBe(false)
+    })
+
+    it('writes nothing once it has refused, rather than half a chain', async () => {
+      const sink = new FileAuditSink({ dir, retentionDays: 90 })
+      await write(sink)
+      const foreign = sealRecord(record(), null)
+      await appendFile(todaysSegment(), `${JSON.stringify(foreign)}\n`)
+
+      await expect(write(sink)).rejects.toThrow()
+
+      const lines = (await readFile(todaysSegment(), 'utf8')).trim().split('\n')
+      expect(lines).toHaveLength(2)
+      expect(JSON.parse(lines[1]).hash).toBe(foreign.hash)
+    })
+
+    /**
+     * A fresh process reads the directory as it finds it, so it adopts the
+     * current size as its baseline and appends normally. That is the restart
+     * case, and it has to keep working — the check is for concurrent writers,
+     * not for a directory that has been written to before.
+     */
+    it('does not refuse a restart that adopts what is already there', async () => {
+      const first = new FileAuditSink({ dir, retentionDays: 90 })
+      await write(first)
+      await write(first)
+
+      const restarted = new FileAuditSink({ dir, retentionDays: 90 })
+      await expect(write(restarted)).resolves.toBeDefined()
+      expect(restarted.healthy()).toBe(true)
+      expect((await restarted.verify()).status).toBe('intact')
+    })
   })
 })

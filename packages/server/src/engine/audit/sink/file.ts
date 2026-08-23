@@ -1,5 +1,5 @@
 import { createReadStream } from 'fs'
-import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'fs/promises'
+import { appendFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises'
 import { createInterface } from 'readline'
 import { join } from 'path'
 import { AuditPage, ChainStatus, SealedAuditRecord, SealedAuditRecordSchema } from '@sluice/shared'
@@ -58,6 +58,11 @@ export class FileAuditSink implements AuditSink {
   private oldest: string | null = null
   private newest: string | null = null
   private currentSegment: string | null = null
+  /**
+   * The size the segment being appended to should have, if this process is the
+   * only thing writing it. Checked before every append; see `writeRecord`.
+   */
+  private expectedSize: number | null = null
   private lastError: string | null = null
   private isHealthy = true
   private initialized: Promise<void> | null = null
@@ -114,8 +119,19 @@ export class FileAuditSink implements AuditSink {
       }
     }
 
+    this.expectedSize = this.currentSegment ? await this.sizeOf(this.currentSegment) : null
+
     this.isHealthy = true
     this.lastError = null
+  }
+
+  /** Bytes in a segment, or null when it does not exist yet. */
+  private async sizeOf(segment: string): Promise<number | null> {
+    try {
+      return (await stat(join(this.dir, segment))).size
+    } catch {
+      return null
+    }
   }
 
   async append(record: SealedAuditRecord): Promise<void> {
@@ -129,18 +145,48 @@ export class FileAuditSink implements AuditSink {
 
   private async writeRecord(record: SealedAuditRecord): Promise<void> {
     const day = utcDay(record.timestamp)
+    const segment = segmentName(day)
+    const line = `${JSON.stringify(record)}\n`
 
     try {
       if (this.currentSegment && segmentDay(this.currentSegment) !== day) {
         await this.enforceRetention(day)
+        this.expectedSize = null
       }
-      await appendFile(this.segmentPath(day), `${JSON.stringify(record)}\n`, { mode: 0o600 })
+
+      // Appends are serialised through a promise chain, which makes this sink
+      // correct for one process and says nothing about a second one. Two
+      // containers on the same mounted volume each seal against their own
+      // in-memory head, so they claim the same sequence numbers and interleave
+      // into a chain that does not verify. That used to stay silent until
+      // somebody ran `sluice verify`, which for the artefact this product sells
+      // is the wrong time to find out.
+      //
+      // A segment that is not the size we left it at has been written by
+      // something other than us — another process, or a hand editing the file.
+      // Refusing rather than appending on top of it makes that a fail-closed
+      // condition: `healthy()` goes false, and the evidence gate in `/ingest`
+      // stops forwarding rather than carrying on without usable proof.
+      if (segment === this.currentSegment && this.expectedSize !== null) {
+        const actual = await this.sizeOf(segment)
+        if (actual !== this.expectedSize) {
+          throw new Error(
+            `audit segment ${segment} changed underneath this process ` +
+              `(expected ${this.expectedSize} bytes, found ${actual}). ` +
+              'Another writer is using this directory, and a chain written by ' +
+              'two processes does not verify.',
+          )
+        }
+      }
+
+      await appendFile(this.segmentPath(day), line, { mode: 0o600 })
     } catch (error) {
       this.fail(error)
       throw error
     }
 
-    this.currentSegment = segmentName(day)
+    this.expectedSize = (this.expectedSize ?? 0) + Buffer.byteLength(line)
+    this.currentSegment = segment
     this.chainHead = { seq: record.seq, hash: record.hash }
     this.entries++
     this.newest = record.timestamp

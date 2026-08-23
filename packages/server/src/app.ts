@@ -2,7 +2,12 @@ import { Hono, Context } from 'hono'
 import { cors } from 'hono/cors'
 import { getCookie, setCookie } from 'hono/cookie'
 import { serveStatic } from '@hono/node-server/serve-static'
-import { ConsentStateSchema, DestinationRuleSchema, PiiDetectorSchema } from '@sluice/shared'
+import {
+  ANONYMOUS_SUBJECT,
+  ConsentStateSchema,
+  DestinationRuleSchema,
+  PiiDetectorSchema,
+} from '@sluice/shared'
 import { ConsentManager } from './engine/consent'
 import { scrubPayload } from './engine/transformer'
 import { createHasher } from './engine/transformations/hash'
@@ -33,17 +38,6 @@ import { supportFor, withSupport } from './destinations/support'
  */
 const IDENTITY_COOKIE = 'cuid'
 
-/**
- * The subject an audit record names when the request carried no identity.
- *
- * A refusal is evidence, and this branch used to produce none — a request with
- * nobody to attribute it to was counted and dropped silently. The record needs a
- * subject, and inventing one here would be the server minting the identifier the
- * client deliberately stopped minting. The parentheses keep it from reading as,
- * or colliding with, a real id.
- */
-const ANONYMOUS_SUBJECT = '(anonymous)'
-
 export interface AppOptions {
   /**
    * Where the durable audit record is written. Passed in rather than built
@@ -65,16 +59,21 @@ export function createApp(storage: StorageProvider, env: any = {}, options: AppO
     effectiveStorage,
     config.defaultConsent as 'allow' | 'deny',
   )
-  const auditLogger = new AuditLogger(effectiveStorage, {
-    sink: options.auditSink,
-    cacheEntries: config.auditCacheEntries,
-    required: config.auditRequired,
-  })
   const ruleManager = new RuleManager(effectiveStorage)
   // Built once from the injected env. It used to be rebuilt inside the hash
   // primitive, from `process.env` rather than from the env the app was handed,
   // which on a runtime without `process` fell through to a hardcoded literal.
   const hasher = createHasher(config.hashSecret)
+  const auditLogger = new AuditLogger(effectiveStorage, {
+    sink: options.auditSink,
+    cacheEntries: config.auditCacheEntries,
+    required: config.auditRequired,
+    // The record is exported. Sealing a keyed digest of the subject means an
+    // audit file can be handed to an auditor without disclosing who its rows
+    // are about, and `/audit?userId=` still answers, because the query is put
+    // through the same hash before it is matched.
+    subjectHasher: (subject) => hasher.pseudonymize(subject),
+  })
 
   app.use('*', requestLogger)
   app.route('/webhooks', createWebhookRouter(storage, config))

@@ -245,6 +245,19 @@ it, so an unconfigured deployment still gets a real scrub there rather than a sk
   admin bearer is entered at runtime and held in session storage. Never read it from a
   build-time `VITE_*` variable. `just check-dist` fails the gate on anything
   secret-shaped in `packages/*/dist`.
+- **The record names a pseudonym, not a subject.** `AuditLogger` seals an HMAC of the
+  subject id under `SLUICE_HASH_SECRET`, so an exported audit file can go to an auditor
+  without disclosing who its rows are about. `/audit?userId=` hashes the query the same
+  way, so an operator still searches by the id their CMP issued. `(anonymous)` is stored
+  as the literal: it names the absence of an identity rather than one being withheld.
+  This is not an answer to an erasure request — a keyed pseudonym is still personal data,
+  and the deployment holds the key. Why the record is retained at all is argued in
+  `docs/scope.md`.
+- **One process writes the record.** `FileAuditSink` serialises appends in-process and
+  checks the segment against the size it left it at before each one. A second writer —
+  another container on the same volume, or a hand editing a file — is refused rather than
+  appended on top of, which turns a chain that silently would not verify into a sink that
+  goes unhealthy and an `/ingest` that stops forwarding.
 - **The record outlives the process.** Every decision is appended to a durable sink
   before the display cache sees it, and the sink is never rewritten — `/api/debug/reset`
   clears the cache and leaves the evidence. Retention deletes whole day segments and
@@ -339,6 +352,10 @@ Real, verified, and unfixed. Do not re-diagnose these from scratch:
   the audit against `RuleManager.getAllRules()`, which iterates `REGISTRY_KEYS`. An
   override for an id the registry lacks gets no health row, because `StorageProvider`
   cannot enumerate keys.
+- **The dashboard shows a pseudonym where it used to show an id.** The audit table,
+  `LiveTraffic` and `sluice logs` print a 64-character digest, which is consistent with
+  how the payload's own `user_id` is treated and is worse to read. Searching still takes
+  the real id.
 - **A day's segment is read whole.** `FileAuditSink.query` loads one UTC-day file at a
   time. Fine at the traffic this is built for; a very high-volume day is a large read.
 - **The egress check does not resolve DNS.** A destination rule that declares a domain

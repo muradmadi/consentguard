@@ -1,4 +1,5 @@
 import {
+  ANONYMOUS_SUBJECT,
   AuditRecord,
   AuditPage,
   ChainStatus,
@@ -26,6 +27,24 @@ export interface AuditLoggerOptions {
    * cannot evidence is a forward we should not make.
    */
   required?: boolean
+  /**
+   * Pseudonymises the subject a record names, before it is sealed.
+   *
+   * The record is exported: `/audit?format=csv` and `sluice export` produce
+   * files that go to auditors and regulators, and they used to carry the CMP's
+   * subject ids in the clear. Sealing a keyed digest instead means an export can
+   * be handed over without disclosing who the rows are about, and a query by
+   * subject still works because the query is hashed the same way before it is
+   * matched.
+   *
+   * What this does not do is answer an erasure request: a keyed pseudonym is
+   * still personal data, and the deployment holds the key. What the record is
+   * retained under is a separate question, argued in `docs/scope.md`.
+   *
+   * Omitted, the subject is stored as it arrived. That is what the sink's own
+   * tests want, since they are asserting on the chain rather than on identity.
+   */
+  subjectHasher?: (subject: string) => string
 }
 
 /**
@@ -41,6 +60,7 @@ export class AuditLogger {
   private readonly cacheEntries: number
   private readonly required: boolean
   private readonly sink: AuditSink
+  private readonly subjectHasher: (subject: string) => string
 
   /**
    * The chain head, held here rather than read back per write. Sealing is a
@@ -58,6 +78,7 @@ export class AuditLogger {
     this.sink = options.sink ?? new NullAuditSink()
     this.cacheEntries = options.cacheEntries ?? DEFAULT_CACHE_ENTRIES
     this.required = options.required ?? true
+    this.subjectHasher = options.subjectHasher ?? ((subject) => subject)
   }
 
   /**
@@ -90,6 +111,7 @@ export class AuditLogger {
     const fullRecord: AuditRecord = {
       transformations: [],
       ...record,
+      userId: this.pseudonymousSubject(record.userId),
       timestamp: new Date().toISOString(),
     }
 
@@ -145,10 +167,32 @@ export class AuditLogger {
     }
   }
 
-  /** Newest first, filtered and paged. The sink answers when there is one. */
+  /**
+   * Newest first, filtered and paged. The sink answers when there is one.
+   *
+   * A subject filter is pseudonymised on the way in, under the same key the
+   * records were sealed with. The operator asks by the id they know — the one
+   * their CMP issued — and never has to hold a digest to search for; the stored
+   * form is what changed, not the question anybody asks of it.
+   */
   async query(query: AuditQuery = {}): Promise<AuditPage> {
-    if (this.sink.configured) return this.sink.query(query)
-    return this.queryCache(query)
+    const resolved: AuditQuery = query.userId
+      ? { ...query, userId: this.pseudonymousSubject(query.userId) }
+      : query
+    if (this.sink.configured) return this.sink.query(resolved)
+    return this.queryCache(resolved)
+  }
+
+  /**
+   * The subject as it is stored and searched for.
+   *
+   * `(anonymous)` is passed through: it names the absence of an identity rather
+   * than an identity we are declining to print, and hashing it would turn a
+   * legible fact into a digest that says the same thing less clearly.
+   */
+  private pseudonymousSubject(subject: string): string {
+    if (subject === ANONYMOUS_SUBJECT) return subject
+    return this.subjectHasher(subject)
   }
 
   private async queryCache(query: AuditQuery): Promise<AuditPage> {

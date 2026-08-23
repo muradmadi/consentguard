@@ -82,6 +82,16 @@ export type SupportLevel = z.infer<typeof SupportLevelSchema>
 export const UNKNOWN_DESTINATION_CATEGORY = 'unknown'
 
 /**
+ * The subject an audit record names when the request carried no identity.
+ *
+ * A constant, and never hashed: a digest of it would be a digest of a constant,
+ * unreadable and meaning exactly what the literal already says. It has to be
+ * distinguishable from a pseudonymised subject, because "nobody" and "somebody
+ * we are not naming" are different facts about a request.
+ */
+export const ANONYMOUS_SUBJECT = '(anonymous)'
+
+/**
  * One declared transformation on a destination rule.
  *
  * `mode` and `normalize` only mean anything to a hash, and a match key is only a

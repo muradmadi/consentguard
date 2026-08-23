@@ -954,11 +954,51 @@ describe('Sluice server', () => {
       })
 
       expect(await latestAudit(app)).toMatchObject({
-        userId: 'stale-bundle',
         destination: 'nosuchvendor',
         decision: 'blocked',
         reason: 'unknown_destination',
       })
+    })
+
+    /**
+     * The record is exported, so the subject is sealed as a keyed digest rather
+     * than as the id the CMP issued. The question an operator asks is unchanged:
+     * they search by the id they know, and the query is hashed the same way.
+     */
+    it('seals the subject as a pseudonym, and still finds it by the real id', async () => {
+      const app = createApp(storage, DEV_ENV)
+
+      await app.request('/ingest/nosuchvendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'stale-bundle' },
+        body: JSON.stringify({ email: 'alice@example.com' }),
+      })
+
+      const stored = await latestAudit(app)
+      expect(stored.userId).not.toBe('stale-bundle')
+      expect(stored.userId).toMatch(/^[0-9a-f]{64}$/)
+
+      const found = await app.request('/audit?userId=stale-bundle', {
+        headers: { Authorization: 'Bearer test-admin' },
+      })
+      const records = ((await found.json()) as any).records
+      expect(records).toHaveLength(1)
+      expect(records[0].reason).toBe('unknown_destination')
+    })
+
+    it('does not match a subject that only looks similar', async () => {
+      const app = createApp(storage, DEV_ENV)
+
+      await app.request('/ingest/nosuchvendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Consent-UserId': 'stale-bundle' },
+        body: JSON.stringify({}),
+      })
+
+      const found = await app.request('/audit?userId=stale-bundl', {
+        headers: { Authorization: 'Bearer test-admin' },
+      })
+      expect(((await found.json()) as any).records).toHaveLength(0)
     })
 
     // The counter is a process-wide singleton shared by every createApp, so
@@ -1547,8 +1587,13 @@ describe('identity promotion', () => {
     expect(res.status).toBe(204)
     expect(upstream).toHaveBeenCalled()
 
-    const audit = await app.request('/audit', { headers: { Authorization: 'Bearer test-admin' } })
-    expect(((await audit.json()) as any).records[0].userId).toBe('promoted-user')
+    // Searched for by the id the operator knows; the stored form is a pseudonym.
+    const audit = await app.request('/audit?userId=promoted-user', {
+      headers: { Authorization: 'Bearer test-admin' },
+    })
+    const records = ((await audit.json()) as any).records
+    expect(records).toHaveLength(1)
+    expect(records[0].userId).not.toBe('promoted-user')
   })
 
   it('marks the cookie Secure outside development', async () => {

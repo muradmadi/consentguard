@@ -545,6 +545,51 @@ live browser, so they verify the rule and the adapter against the format rather 
 a recording. Replacing them with real captures is a strict improvement and needs no other
 change. And the other five destinations remain unverified.
 
+### 13. Decide what the record itself discloses — **done**
+
+Every sealed record carried the CMP's subject id in the clear, for ninety days, in an
+append-only chain built to make deletion detectable. That is the one place where the two
+halves of the product pull against each other, and the repository had no stated position.
+
+Most of the tension turned out to be misread. The subject id is already pseudonymous — it
+is never a name or an address, and the values the firewall removes are deliberately never
+recorded. Retention is bounded by `SLUICE_AUDIT_RETENTION_DAYS`. And an audit proving that
+personal data did not reach a vendor sits close to the centre of Art. 17(3)(e), defence of
+legal claims, and of the accountability duty in Art. 5(2); records kept to demonstrate
+compliance are ordinarily retained through an erasure request. More to the point, the
+subject is what lets the record answer a _subject access_ request — `/audit?userId=` is how
+an operator tells a data subject what happened to their data. Removing it would have made
+the record less useful to the person it is about.
+
+What was worth fixing was narrower, and it is not erasure. **The record is exported.**
+`/audit?format=csv` and `sluice export` produce files that go to auditors and regulators,
+and those carried subject ids. `AuditLogger` now seals an HMAC of the subject under
+`SLUICE_HASH_SECRET`, and hashes a `userId` filter the same way before matching — so the
+question an operator asks is unchanged, the stored and exported form is not. `(anonymous)`
+stays a literal, because it names the absence of an identity rather than one being withheld,
+and a digest of a constant would say the same thing less clearly.
+
+The limit is worth stating plainly, because it is easy to overclaim: a keyed pseudonym is
+still personal data under Recital 26, and the deployment holds the key. This reduces what a
+leaked or shared audit directory exposes. It does not discharge an erasure obligation. The
+option that would — sealing the hash and keeping a separate, deletable mapping — costs a new
+store, an erasure endpoint and a lookup on every read path, and is not worth it at this
+size. The cost paid here is legibility: the dashboard and `sluice logs` now print a digest.
+
+**A second writer was corrupting the chain silently.** `FileAuditSink` serialises appends
+through an in-process promise chain, which makes it correct for one process and says nothing
+about a second. Two containers on one mounted volume each seal against their own in-memory
+head, claim the same sequence numbers, and interleave into a chain that does not verify —
+and nothing noticed until somebody happened to run `sluice verify`, which for the artefact
+this product sells is the wrong time to find out. The sink now records the size it left the
+segment at and checks it before each append: a segment that changed underneath it is refused
+rather than appended on top of, `healthy()` goes false, and the evidence gate stops
+`/ingest` forwarding. It catches a hand-edited file as readily as another process, and a
+restart still adopts what it finds, because the check is for a concurrent writer and not for
+a directory that has been written to before. A lock was considered and rejected: it would
+have introduced a stale-lock failure mode — a crashed container leaving a lock that stops
+the next one starting — in exchange for preventing a condition this detects.
+
 ## Non-goals
 
 Restated from `CLAUDE.md` because this is where they get argued with: no consent UI,
